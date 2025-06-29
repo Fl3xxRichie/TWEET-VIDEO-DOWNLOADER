@@ -22,58 +22,122 @@ class RedisCache:
     def _connect_redis(self):
         """Establishes connection to Redis."""
         try:
-            logger.info(f"Connecting to Redis at {Config.REDIS_URL}")
+            logger.info(f"Connecting to Redis...")
 
-            # Handle Redis TLS connection
-            ssl_options = {}
-            if Config.REDIS_URL.startswith('rediss://'):
-                ssl_options = {'ssl_cert_reqs': None}  # Disable certificate verification
+            # Parse Redis URL to handle Upstash format
+            redis_url = Config.REDIS_URL
 
-            self._redis_client = redis.from_url(
-                Config.REDIS_URL,
-                decode_responses=True
-            )
+            # Handle Upstash Redis URLs which often need SSL
+            if 'upstash.io' in redis_url:
+                # For Upstash, we need to use SSL
+                if not redis_url.startswith('rediss://'):
+                    redis_url = redis_url.replace('redis://', 'rediss://')
+
+                self._redis_client = redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    ssl_cert_reqs=None,  # Don't verify SSL certificates
+                    socket_connect_timeout=10,
+                    socket_timeout=10,
+                    retry_on_timeout=True
+                )
+            else:
+                # For local or other Redis instances
+                self._redis_client = redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=10,
+                    socket_timeout=10
+                )
+
+            # Test the connection
             self._redis_client.ping()
             logger.info("Successfully connected to Redis.")
+
         except redis.exceptions.ConnectionError as e:
             logger.error(f"Could not connect to Redis: {e}")
+            logger.info("Running without Redis - using in-memory fallback")
+            self._redis_client = None
+        except Exception as e:
+            logger.error(f"Unexpected Redis connection error: {e}")
             self._redis_client = None
 
     def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
         """Set a key-value pair in Redis."""
         if not self._redis_client:
-            logger.warning("Redis client not connected. Cannot set data.")
-            return False
+            logger.debug("Redis client not connected. Using in-memory storage.")
+            # Fallback to in-memory storage
+            return self._memory_set(key, value, ex)
+
         try:
-            self._redis_client.set(key, json.dumps(value), ex=ex)
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            self._redis_client.set(key, value, ex=ex)
             return True
         except Exception as e:
             logger.error(f"Error setting key '{key}' in Redis: {e}")
-            return False
+            return self._memory_set(key, value, ex)
 
     def get(self, key: str) -> Optional[Any]:
         """Get a value from Redis."""
         if not self._redis_client:
-            logger.warning("Redis client not connected. Cannot get data.")
-            return None
+            logger.debug("Redis client not connected. Using in-memory storage.")
+            return self._memory_get(key)
+
         try:
             value = self._redis_client.get(key)
-            return json.loads(value) if value else None
+            if value is None:
+                return None
+
+            # Try to parse as JSON, fallback to string
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+
         except Exception as e:
             logger.error(f"Error getting key '{key}' from Redis: {e}")
-            return None
+            return self._memory_get(key)
 
     def delete(self, key: str) -> bool:
         """Delete a key from Redis."""
         if not self._redis_client:
-            logger.warning("Redis client not connected. Cannot delete data.")
-            return False
+            logger.debug("Redis client not connected. Using in-memory storage.")
+            return self._memory_delete(key)
+
         try:
             self._redis_client.delete(key)
             return True
         except Exception as e:
             logger.error(f"Error deleting key '{key}' from Redis: {e}")
-            return False
+            return self._memory_delete(key)
+
+    # Fallback in-memory storage
+    _memory_store = {}
+    _memory_expiry = {}
+
+    def _memory_set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        """Fallback in-memory set operation."""
+        self._memory_store[key] = value
+        if ex:
+            self._memory_expiry[key] = time.time() + ex
+        return True
+
+    def _memory_get(self, key: str) -> Optional[Any]:
+        """Fallback in-memory get operation."""
+        # Check if expired
+        if key in self._memory_expiry:
+            if time.time() > self._memory_expiry[key]:
+                self._memory_delete(key)
+                return None
+
+        return self._memory_store.get(key)
+
+    def _memory_delete(self, key: str) -> bool:
+        """Fallback in-memory delete operation."""
+        self._memory_store.pop(key, None)
+        self._memory_expiry.pop(key, None)
+        return True
 
 # Initialize Redis cache
 redis_cache = RedisCache()
@@ -129,14 +193,19 @@ def parse_tweet_id(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 def check_rate_limit(user_id: int) -> bool:
-    """Check if user has exceeded rate limit using Redis"""
+    """Check if user has exceeded rate limit using Redis or in-memory fallback"""
     now = datetime.now()
     key = f"rate_limit:{user_id}"
     user_data = redis_cache.get(key)
 
-    if user_data:
-        window_start = datetime.fromisoformat(user_data['window_start'])
-        count = user_data['count']
+    if user_data and isinstance(user_data, dict):
+        try:
+            window_start = datetime.fromisoformat(user_data['window_start'])
+            count = user_data['count']
+        except (KeyError, ValueError):
+            # Handle corrupted data
+            window_start = now
+            count = 0
     else:
         window_start = now
         count = 0
@@ -148,11 +217,17 @@ def check_rate_limit(user_id: int) -> bool:
 
     # Check limit
     if count >= Config.RATE_LIMIT_PER_HOUR:
+        logger.info(f"Rate limit exceeded for user {user_id}: {count}/{Config.RATE_LIMIT_PER_HOUR}")
         return False
 
-    # Update count and save to Redis
+    # Update count and save
     count += 1
-    redis_cache.set(key, {'count': count, 'window_start': window_start.isoformat()}, ex=3600) # Expire after 1 hour
+    redis_cache.set(key, {
+        'count': count,
+        'window_start': window_start.isoformat()
+    }, ex=3600)  # Expire after 1 hour
+
+    logger.debug(f"Rate limit check for user {user_id}: {count}/{Config.RATE_LIMIT_PER_HOUR}")
     return True
 
 class UserPreferences:
@@ -167,7 +242,9 @@ class UserPreferences:
             return {}
         try:
             with open(self._prefs_file, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                # Convert string keys to int for user IDs
+                return {int(k): v for k, v in data.items()}
         except Exception as e:
             logger.error(f"Failed to load preferences: {e}")
             return {}
@@ -176,7 +253,9 @@ class UserPreferences:
         """Save preferences to JSON file"""
         try:
             with open(self._prefs_file, 'w') as f:
-                json.dump(self._prefs, f)
+                # Convert int keys to strings for JSON serialization
+                data = {str(k): v for k, v in self._prefs.items()}
+                json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save preferences: {e}")
 
@@ -190,6 +269,7 @@ class UserPreferences:
             self._prefs[user_id] = {}
         self._prefs[user_id][key] = value
         self._save_prefs()
+        logger.debug(f"Set preference for user {user_id}: {key}={value}")
 
 # Initialize preferences storage
 user_prefs = UserPreferences()
