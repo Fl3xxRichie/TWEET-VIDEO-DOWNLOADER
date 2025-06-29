@@ -22,7 +22,17 @@ class RedisCache:
     def _connect_redis(self):
         """Establishes connection to Redis."""
         try:
-            self._redis_client = redis.from_url(Config.REDIS_URL, decode_responses=True)
+            logger.info(f"Connecting to Redis at {Config.REDIS_URL}")
+
+            # Handle Redis TLS connection
+            ssl_options = {}
+            if Config.REDIS_URL.startswith('rediss://'):
+                ssl_options = {'ssl_cert_reqs': None}  # Disable certificate verification
+
+            self._redis_client = redis.from_url(
+                Config.REDIS_URL,
+                decode_responses=True
+            )
             self._redis_client.ping()
             logger.info("Successfully connected to Redis.")
         except redis.exceptions.ConnectionError as e:
