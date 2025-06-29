@@ -40,6 +40,7 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 - **📏 File Size Control**: Automatic file size validation and compression
 - **🔄 Auto-Retry**: Intelligent retry mechanism for failed downloads
 - **📝 Comprehensive Logging**: Detailed logs for monitoring and debugging
+- **🔒 Redis Integration**: Utilizes Redis for efficient rate limiting and session management
 - **🌐 Multi-Format Support**: Various Twitter/X URL formats supported
 
 ### Deployment & Scaling
@@ -168,9 +169,27 @@ Before you begin, ensure you have the following installed:
 
    # Temporary file cleanup interval (hours)
    CLEANUP_INTERVAL_HOURS=1
+
+   # ===========================================
+   # REDIS CONFIGURATION
+   # ===========================================
+   # Redis connection URL (leave empty to disable Redis)
+   REDIS_URL=redis://localhost:6379/0
    ```
 
 ### Getting Your Bot Token
+
+### Redis Setup
+
+For local development, you can easily set up a Redis instance using Docker:
+
+```bash
+docker run --name some-redis -p 6379:6379 -d redis
+```
+
+This command starts a Redis container named `some-redis` and maps port `6379` to your host machine. You can then use `REDIS_URL=redis://localhost:6379/0` in your `.env` file.
+
+For live deployments, consider using a managed Redis service like [Upstash](https://upstash.com/). Upstash provides a serverless Redis offering with a free tier, and you can obtain your `REDIS_URL` directly from their dashboard.
 
 1. Open Telegram and search for [@BotFather](https://t.me/botfather)
 2. Send `/newbot` command
@@ -234,6 +253,21 @@ docker run -e BOT_TOKEN=your_token -p 8000:8000 tweet-video-downloader
    ```bash
    git push heroku main
    ```
+
+### Redis Deployment (Optional)
+
+If you're deploying to a live server and require Redis for rate limiting or session management, you have a few options:
+
+- **Managed Redis Service**:
+  - **Upstash**: Recommended for serverless deployments. Sign up at [Upstash](https://upstash.com/) to get a free Redis instance and obtain your `REDIS_URL`.
+  - Other cloud providers like AWS ElastiCache, Google Cloud Memorystore, or Azure Cache for Redis.
+
+- **Self-Hosted Redis (Docker)**:
+  If you have a server, you can deploy Redis using Docker:
+  ```bash
+  docker run -d --name my-redis -p 6379:6379 redis/redis-stack-server:latest
+  ```
+  Ensure your `REDIS_URL` in the `.env` file points to your Redis instance (e.g., `redis://your-server-ip:6379/0`).
 
 ### Railway Deployment
 
@@ -338,6 +372,7 @@ tweet-video-downloader/
 ├── 📄 utils.py                # Utility functions and helpers
 ├── 📄 database.py             # User data and statistics management
 ├── 📄 rate_limiter.py         # Rate limiting implementation
+├── 📄 redis_client.py         # Redis connection and utilities
 ├── 📄 logger.py               # Logging configuration
 ├── 📄 requirements.txt        # Python dependencies
 ├── 📄 Dockerfile              # Docker container configuration
