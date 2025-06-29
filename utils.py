@@ -1,17 +1,72 @@
 import os
 import time
-from typing import Optional, Dict, Any
+import re
+import json
+import redis
 import logging
+from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from config import Config
-
-# Rate limiting storage
-_rate_limits: Dict[int, Dict[str, int]] = {}
+from pathlib import Path
+import threading
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-import threading
-from collections import defaultdict
+class RedisCache:
+    """Handles caching data in Redis."""
+    def __init__(self):
+        self._redis_client = None
+        self._connect_redis()
+
+    def _connect_redis(self):
+        """Establishes connection to Redis."""
+        try:
+            self._redis_client = redis.from_url(Config.REDIS_URL, decode_responses=True)
+            self._redis_client.ping()
+            logger.info("Successfully connected to Redis.")
+        except redis.exceptions.ConnectionError as e:
+            logger.error(f"Could not connect to Redis: {e}")
+            self._redis_client = None
+
+    def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        """Set a key-value pair in Redis."""
+        if not self._redis_client:
+            logger.warning("Redis client not connected. Cannot set data.")
+            return False
+        try:
+            self._redis_client.set(key, json.dumps(value), ex=ex)
+            return True
+        except Exception as e:
+            logger.error(f"Error setting key '{key}' in Redis: {e}")
+            return False
+
+    def get(self, key: str) -> Optional[Any]:
+        """Get a value from Redis."""
+        if not self._redis_client:
+            logger.warning("Redis client not connected. Cannot get data.")
+            return None
+        try:
+            value = self._redis_client.get(key)
+            return json.loads(value) if value else None
+        except Exception as e:
+            logger.error(f"Error getting key '{key}' from Redis: {e}")
+            return None
+
+    def delete(self, key: str) -> bool:
+        """Delete a key from Redis."""
+        if not self._redis_client:
+            logger.warning("Redis client not connected. Cannot delete data.")
+            return False
+        try:
+            self._redis_client.delete(key)
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting key '{key}' from Redis: {e}")
+            return False
+
+# Initialize Redis cache
+redis_cache = RedisCache()
 
 # Track temporary files
 _temp_files: Dict[str, Dict[str, Any]] = defaultdict(dict)
@@ -49,8 +104,6 @@ def cleanup_all_temp_files() -> None:
         if filepath in _temp_files:
             del _temp_files[filepath]
 
-import re
-
 def validate_twitter_url(url: str) -> bool:
     """Validate if URL is a valid Twitter/X URL"""
     patterns = [
@@ -66,25 +119,31 @@ def parse_tweet_id(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 def check_rate_limit(user_id: int) -> bool:
-    """Check if user has exceeded rate limit"""
+    """Check if user has exceeded rate limit using Redis"""
     now = datetime.now()
-    user_data = _rate_limits.get(user_id, {'count': 0, 'window_start': now})
+    key = f"rate_limit:{user_id}"
+    user_data = redis_cache.get(key)
+
+    if user_data:
+        window_start = datetime.fromisoformat(user_data['window_start'])
+        count = user_data['count']
+    else:
+        window_start = now
+        count = 0
 
     # Reset if window expired
-    if now - user_data['window_start'] > timedelta(hours=1):
-        user_data = {'count': 0, 'window_start': now}
+    if now - window_start > timedelta(hours=1):
+        window_start = now
+        count = 0
 
     # Check limit
-    if user_data['count'] >= Config.RATE_LIMIT_PER_HOUR:
+    if count >= Config.RATE_LIMIT_PER_HOUR:
         return False
 
-    # Update count
-    user_data['count'] += 1
-    _rate_limits[user_id] = user_data
+    # Update count and save to Redis
+    count += 1
+    redis_cache.set(key, {'count': count, 'window_start': window_start.isoformat()}, ex=3600) # Expire after 1 hour
     return True
-
-import json
-from pathlib import Path
 
 class UserPreferences:
     """Handles storage and retrieval of user preferences"""

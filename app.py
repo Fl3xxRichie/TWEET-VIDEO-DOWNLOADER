@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -33,7 +34,51 @@ file_handler = logging.handlers.RotatingFileHandler(
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-app = FastAPI()
+async def cleanup_scheduler():
+    """Periodically clean up old files."""
+    while True:
+        try:
+            video_downloader.cleanup_old_files(max_age_minutes=15)
+        except Exception as e:
+            logger.error(f"Error during scheduled cleanup: {e}")
+        await asyncio.sleep(600)  # Sleep for 10 minutes
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Handle startup and shutdown events.
+    """
+    # Startup
+    cleanup_task = asyncio.create_task(cleanup_scheduler())
+    logger.info("Started background cleanup task.")
+
+    if Config.WEBHOOK_URL:
+        try:
+            await application.initialize()
+            await application.bot.set_webhook(
+                url=Config.WEBHOOK_URL,
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+            logger.info(f"Webhook set to {Config.WEBHOOK_URL}")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
+
+    yield
+
+    # Shutdown
+    cleanup_task.cancel()
+    logger.info("Stopped background cleanup task.")
+
+    if Config.WEBHOOK_URL:
+        try:
+            await application.bot.delete_webhook()
+            await application.shutdown()
+            logger.info("Webhook deleted and application shut down")
+        except Exception as e:
+            logger.error(f"Failed to delete webhook: {e}")
+
+app = FastAPI(lifespan=lifespan)
 
 # Custom exception handler
 @app.exception_handler(Exception)
@@ -70,8 +115,10 @@ from video_downloader import VideoDownloader
 
 video_downloader = VideoDownloader()
 
-# In-memory storage for URLs (for local testing, consider Redis for production)
-url_cache = {}
+from utils import validate_twitter_url, check_rate_limit, user_prefs, redis_cache
+from video_downloader import VideoDownloader
+
+video_downloader = VideoDownloader()
 
 async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle quality selection callback"""
@@ -91,10 +138,10 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
         parts = data.split('_')
         quality = parts[1]
         url_id = parts[2]
-        url = url_cache.get(url_id)
+        url = redis_cache.get(url_id) # Retrieve URL from Redis
 
         if not url:
-            await query.edit_message_text("❌ Error: Original URL not found. Please send the link again.")
+            await query.edit_message_text("❌ Error: Original URL not found or expired. Please send the link again.")
             return
 
         # Save as last used quality
@@ -167,8 +214,7 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
 
         finally:
             # Clean up URL from cache
-            if url_id in url_cache:
-                del url_cache[url_id]
+            redis_cache.delete(url_id) # Delete URL from Redis
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
@@ -237,7 +283,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Generate a unique ID for the URL to use in callbacks
     url_id = str(hash(url))  # Simple hash for unique ID
-    url_cache[url_id] = url  # Store the URL in cache
+    redis_cache.set(url_id, url, ex=300) # Store the URL in Redis with a 5-minute expiration
 
     # Create buttons with accurate size estimates
     buttons = []
@@ -314,29 +360,6 @@ async def health_check():
 
 application = setup_application()
 
-@app.on_event("startup")
-async def on_startup():
-    """Set webhook on startup if in production"""
-    if Config.WEBHOOK_URL:
-        try:
-            await application.bot.set_webhook(
-                url=Config.WEBHOOK_URL,
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-            logger.info(f"Webhook set to {Config.WEBHOOK_URL}")
-        except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    """Delete webhook on shutdown"""
-    if Config.WEBHOOK_URL:
-        try:
-            await application.bot.delete_webhook()
-            logger.info("Webhook deleted")
-        except Exception as e:
-            logger.error(f"Failed to delete webhook: {e}")
 
 @app.post("/")
 async def handle_telegram_update(request: Request):

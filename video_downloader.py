@@ -1,5 +1,6 @@
 import os
 import yt_dlp
+import time
 import asyncio
 import logging
 from typing import Dict, Optional, Callable
@@ -72,13 +73,14 @@ class VideoDownloader:
 
     async def download_video(self, url: str, quality: str, progress_callback: Optional[Callable] = None) -> Dict:
         """Download video with specified quality"""
-        try:
-            # Generate filename
-            main_loop = asyncio.get_running_loop()
-            timestamp = int(main_loop.time())
-            filename = f"video_{timestamp}"
-            output_path = os.path.join(self.download_path, filename)
+        main_loop = asyncio.get_running_loop()
+        timestamp = int(time.time())
+        filename = f"video_{timestamp}"
+        output_path = os.path.join(self.download_path, filename)
 
+        logger.info(f"Starting download for URL: {url} with quality: {quality}")
+
+        try:
             # Quality format selection
             format_selector = self._get_format_selector(quality)
 
@@ -99,7 +101,12 @@ class VideoDownloader:
                 'no_warnings': True,
                 'extractaudio': quality == 'audio',
                 'audioformat': 'mp3' if quality == 'audio' else None,
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
             }
+            logger.debug(f"yt-dlp options: {ydl_opts}")
 
             # Check file size limit before download
             if Config.MAX_FILE_SIZE_MB:
@@ -109,7 +116,11 @@ class VideoDownloader:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-            await main_loop.run_in_executor(None, download)
+            # Run download with a 5-minute timeout
+            await asyncio.wait_for(
+                main_loop.run_in_executor(None, download),
+                timeout=300.0
+            )
 
             # Find the downloaded file
             downloaded_file = None
@@ -128,26 +139,31 @@ class VideoDownloader:
                     'file_size': f"{file_size:.2f}MB"
                 }
             else:
+                logger.error(f"Download completed but file not found for timestamp: {timestamp}")
                 return {
                     'success': False,
                     'error': 'Download completed but file not found'
                 }
 
+        except asyncio.TimeoutError:
+            logger.error(f"Download timed out for URL: {url}")
+            return {'success': False, 'error': 'Download timed out after 5 minutes'}
+
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Download error: {error_msg}")
+            logger.error(f"Download error for {url}: {error_msg}", exc_info=True)
 
             # Clean up any partial files
             try:
                 for file in os.listdir(self.download_path):
                     if file.startswith(f"video_{timestamp}"):
                         os.remove(os.path.join(self.download_path, file))
-            except:
-                pass
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup for {timestamp}: {cleanup_error}")
 
             return {
                 'success': False,
-                'error': error_msg
+                'error': "An unexpected error occurred during download."
             }
 
     def _get_format_selector(self, quality: str) -> str:
@@ -164,7 +180,7 @@ class VideoDownloader:
     def cleanup_old_files(self, max_age_minutes: int = 10):
         """Clean up old downloaded files"""
         try:
-            current_time = asyncio.get_event_loop().time()
+            current_time = time.time()
 
             for filename in os.listdir(self.download_path):
                 file_path = os.path.join(self.download_path, filename)
