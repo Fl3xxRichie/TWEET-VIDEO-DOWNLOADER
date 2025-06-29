@@ -1,0 +1,17 @@
+.env
+downloads/
+user_prefs.json
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+test*
+tmp
+*.log
+*.bak
+*.swp
+dockercommand.md
+task.md
+venv
