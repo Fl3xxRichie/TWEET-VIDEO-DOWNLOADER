@@ -321,6 +321,27 @@ If you're deploying to a live server and require Redis for rate limiting or sess
    sudo systemctl start tweet-bot
    ```
 
+### Keeping the Bot Alive on Free Tiers (e.g., Render)
+
+Free hosting services like Render or Heroku often put applications to "sleep" after a period of inactivity to conserve resources. To prevent this and ensure your bot remains online 24/7, this project includes a keep-alive mechanism.
+
+1.  **Health Check Endpoint**: The application exposes a `/health` endpoint that can be periodically pinged to signal that the bot is active.
+
+2.  **Automated Pinging with GitHub Actions**: A pre-configured GitHub Actions workflow is included in `.github/workflows/health_check.yml`. This workflow automatically pings the `/health` endpoint every 10 minutes.
+
+**How to Enable:**
+
+To activate this feature, you only need to add your bot's public URL to your GitHub repository's secrets:
+
+1.  Navigate to your repository on GitHub.
+2.  Go to **Settings** > **Secrets and variables** > **Actions**.
+3.  Click **New repository secret**.
+4.  Create a secret with the following details:
+    -   **Name**: `HEALTH_CHECK_URL`
+    -   **Value**: `https://your-app-name.onrender.com/health` (replace with your actual Render/Heroku app URL).
+
+Once the secret is added, the workflow will start running on its schedule, keeping your bot awake.
+
 ## 🤖 Bot Commands
 
 | Command | Description | Usage |
