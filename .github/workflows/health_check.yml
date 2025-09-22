@@ -1,0 +1,12 @@
+name: Health Check
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+jobs:
+  health_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Health Check Endpoint
+        run: curl -sS ${{ secrets.HEALTH_CHECK_URL }} > /dev/null
