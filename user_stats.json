@@ -1,0 +1,31 @@
+{
+  "5881924779": {
+    "total_downloads": 1,
+    "downloads_by_quality": {
+      "hd": 1,
+      "720p": 0,
+      "480p": 0,
+      "audio": 0
+    },
+    "first_used": "2025-11-23T15:32:43.095245",
+    "last_used": "2025-11-23T15:33:55.250708",
+    "total_size_mb": 2.6932458877563477,
+    "download_history": [
+      {
+        "timestamp": "2025-11-23T15:33:55.250708",
+        "quality": "hd",
+        "size_mb": 2.69,
+        "url": "https://x.com/Wizarab10/status/1969683376568459504..."
+      }
+    ],
+    "daily_stats": {
+      "2025-11-23": {
+        "downloads": 1,
+        "size_mb": 2.6932458877563477,
+        "qualities": {
+          "hd": 1
+        }
+      }
+    }
+  }
+}

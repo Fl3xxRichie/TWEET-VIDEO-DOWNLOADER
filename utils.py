@@ -271,5 +271,83 @@ class UserPreferences:
         self._save_prefs()
         logger.debug(f"Set preference for user {user_id}: {key}={value}")
 
+    def get_all_preferences(self, user_id: int) -> Dict[str, Any]:
+        """Get all preferences for a user"""
+        return self._prefs.get(user_id, {}).copy()
+
+    def delete_user_data(self, user_id: int) -> bool:
+        """Delete all user data (GDPR compliance)"""
+        if user_id in self._prefs:
+            del self._prefs[user_id]
+            self._save_prefs()
+            logger.info(f"Deleted preferences for user {user_id}")
+            return True
+        return False
+
 # Initialize preferences storage
 user_prefs = UserPreferences()
+
+
+def format_file_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
+
+
+def format_duration(seconds: int) -> str:
+    """Convert seconds to human-readable duration"""
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}m {secs}s"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+    else:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        return f"{days}d {hours}h"
+
+
+def get_quality_emoji(quality: str) -> str:
+    """Get emoji for quality level"""
+    quality_emojis = {
+        'hd': '🎬',      # HD quality
+        '720p': '📺',    # SD 720p
+        '480p': '📱',    # SD 480p
+        'audio': '🎵'    # Audio only
+    }
+    return quality_emojis.get(quality.lower(), '📥')
+
+
+def format_timestamp(iso_timestamp: str) -> str:
+    """Format ISO timestamp to readable format"""
+    try:
+        dt = datetime.fromisoformat(iso_timestamp)
+        now = datetime.now()
+        diff = now - dt
+
+        if diff.days == 0:
+            if diff.seconds < 60:
+                return "Just now"
+            elif diff.seconds < 3600:
+                minutes = diff.seconds // 60
+                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                hours = diff.seconds // 3600
+                return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif diff.days == 1:
+            return "Yesterday"
+        elif diff.days < 7:
+            return f"{diff.days} days ago"
+        else:
+            return dt.strftime("%b %d, %Y")
+    except Exception as e:
+        logger.error(f"Error formatting timestamp: {e}")
+        return "Unknown"

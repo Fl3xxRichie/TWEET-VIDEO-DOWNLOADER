@@ -20,6 +20,15 @@ class Config:
     RATE_LIMIT_PER_HOUR = int(os.getenv('RATE_LIMIT_PER_HOUR', 5))
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
+    # Admin configuration (optional)
+    ADMIN_USER_ID = os.getenv('ADMIN_USER_ID', None)
+    if ADMIN_USER_ID:
+        try:
+            ADMIN_USER_ID = int(ADMIN_USER_ID)
+        except ValueError:
+            logger.warning(f"Invalid ADMIN_USER_ID: {ADMIN_USER_ID}, admin features disabled")
+            ADMIN_USER_ID = None
+
     # Enhanced Redis URL parsing
     _redis_url = os.getenv('REDIS_URL')
 
