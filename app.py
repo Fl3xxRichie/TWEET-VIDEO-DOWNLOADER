@@ -377,6 +377,15 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             )
             return
 
+        # Handle cancel download
+        elif data == 'cancel_download':
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Download cancelled. Send another URL when you're ready!"
+            )
+            return
+
         # Handle quality preference setting
 
         if data.startswith('quality_'):
@@ -715,6 +724,50 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in about command: {e}", exc_info=True)
 
 
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display user's download history"""
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"History command from user {user_id}")
+
+        # Get user statistics which includes download history
+        stats = user_stats_db.get_user_stats(user_id)
+        history = stats.get('download_history', [])
+
+        if not history:
+            await update.message.reply_text(
+                "📜 **Download History**\n\n"
+                "You haven't downloaded any videos yet!\n\n"
+                "Send a Twitter/X video URL to get started.",
+                parse_mode='Markdown'
+            )
+            return
+
+        # Build history message
+        history_text = "📜 **Your Download History**\n\n"
+
+        for i, download in enumerate(history[:10], 1):
+            emoji = get_quality_emoji(download['quality'])
+            history_text += (
+                f"{i}. {emoji} **{download['quality'].upper()}** - "
+                f"{download['size_mb']} MB\n"
+                f"   ⏰ {format_timestamp(download['timestamp'])}\n"
+            )
+
+        history_text += f"\n📊 Total downloads: {stats['total_downloads']}"
+
+        keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
+
+        await update.message.reply_text(
+            history_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error in history command: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error retrieving history. Please try again.")
+
+
 async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display comprehensive admin statistics (admin only)"""
     try:
@@ -837,18 +890,57 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             )
 
-        # Arrange buttons in 2x2 grid
+        # Arrange buttons in 2x2 grid + cancel button
         keyboard = [
             buttons[:2],
-            buttons[2:]
+            buttons[2:],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_download")]
         ]
 
-        await processing_msg.edit_text(
-            "Choose video quality (estimated sizes):",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+        # Format duration
+        duration = video_info.get('duration', 0)
+        if duration:
+            minutes, seconds = divmod(int(duration), 60)
+            duration_str = f"{minutes}:{seconds:02d}"
+        else:
+            duration_str = "Unknown"
+
+        # Build caption with video info
+        caption = (
+            f"🎬 **{video_info.get('title', 'Video')}**\n\n"
+            f"👤 {video_info.get('uploader', 'Unknown')}\n"
+            f"⏱️ Duration: {duration_str}\n\n"
+            f"Select quality to download:"
         )
 
-        logger.info(f"Quality selection buttons sent to user {user_id}")
+        # Delete processing message
+        await processing_msg.delete()
+
+        # Send thumbnail with quality buttons if available
+        thumbnail_url = video_info.get('thumbnail')
+        if thumbnail_url:
+            try:
+                await update.message.reply_photo(
+                    photo=thumbnail_url,
+                    caption=caption,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send thumbnail: {e}, falling back to text")
+                await update.message.reply_text(
+                    caption,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+        else:
+            await update.message.reply_text(
+                caption,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+
+        logger.info(f"Quality selection with thumbnail sent to user {user_id}")
 
     except Exception as e:
         logger.error(f"Error in handle_url: {e}", exc_info=True)
@@ -888,6 +980,7 @@ def setup_application() -> Application:
     application.add_handler(CommandHandler("settings", settings_command))
     application.add_handler(CommandHandler("about", about_command))
     application.add_handler(CommandHandler("adminstats", admin_stats_command))
+    application.add_handler(CommandHandler("history", history_command))
 
     # Message handler for URLs
     application.add_handler(MessageHandler(

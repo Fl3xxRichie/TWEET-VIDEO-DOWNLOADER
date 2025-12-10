@@ -38,6 +38,10 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 ### Advanced Features
 - **🛡️ Rate Limiting**: Configurable per-user download limits to prevent abuse
 - **📏 File Size Control**: Automatic file size validation and compression
+- **🗜️ Auto-Compression**: Automatically compresses videos over 45MB to fit Telegram limits
+- **🖼️ Thumbnail Preview**: See video thumbnail, title, and duration before downloading
+- **📜 Download History**: View your last 10 downloads with `/history`
+- **📊 Download Queue**: Redis-based queue system for handling high traffic
 - **🔄 Auto-Retry**: Intelligent retry mechanism for failed downloads
 - **📝 Comprehensive Logging**: Detailed logs for monitoring and debugging
 - **🔒 Redis Integration**: Utilizes Redis for rate limiting, user statistics, and preferences (required for persistent storage)
@@ -93,7 +97,7 @@ Before you begin, ensure you have the following installed:
 
    # On Windows Bash
    source venv/Scripts/activate
-   
+
    # On Windows
    venv\Scripts\activate
 
@@ -382,13 +386,18 @@ Once the secret is added, the workflow will start running on its schedule, keepi
 | `/help` | Detailed help and feature overview | `/help` |
 | `/quality` | Set your default video quality preference | `/quality` |
 | `/stats` | View your download statistics | `/stats` |
+| `/history` | View your last 10 downloads | `/history` |
 | `/settings` | Configure personal bot settings | `/settings` |
 | `/about` | Information about the bot and developer | `/about` |
+| `/adminstats` | Admin dashboard (admin only) | `/adminstats` |
 
 ### Interactive Features
 
+- **Thumbnail Preview**: See video info and thumbnail before downloading
 - **Quality Selection**: Choose video quality via inline buttons
+- **Cancel Option**: Cancel download before it starts
 - **Progress Updates**: Real-time download progress bars
+- **Auto-Compression**: Large files automatically compressed
 - **Error Handling**: User-friendly error messages with solutions
 - **Format Options**: Multiple download format choices
 

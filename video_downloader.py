@@ -64,6 +64,8 @@ class VideoDownloader:
             return {
                 'title': info.get('title', 'Video'),
                 'duration': info.get('duration', 0),
+                'thumbnail': info.get('thumbnail'),
+                'uploader': info.get('uploader', 'Unknown'),
                 'size_estimates': size_estimates
             }
 
@@ -192,3 +194,101 @@ class VideoDownloader:
 
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
+
+    async def compress_video(
+        self,
+        file_path: str,
+        target_size_mb: float = 45.0,
+        progress_callback: Optional[Callable] = None
+    ) -> Dict:
+        """
+        Compress video to target size using ffmpeg.
+        Returns dict with success status and compressed file path.
+        """
+        import subprocess
+        import shutil
+
+        try:
+            # Check if ffmpeg is available
+            if not shutil.which('ffmpeg'):
+                logger.warning("ffmpeg not found, skipping compression")
+                return {'success': False, 'error': 'ffmpeg not available', 'file_path': file_path}
+
+            # Get current file size
+            current_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+            if current_size_mb <= target_size_mb:
+                logger.info(f"File already under {target_size_mb}MB, no compression needed")
+                return {'success': True, 'compressed': False, 'file_path': file_path}
+
+            # Calculate target bitrate
+            # Get video duration using ffprobe
+            duration_cmd = [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', file_path
+            ]
+
+            loop = asyncio.get_event_loop()
+
+            def get_duration():
+                result = subprocess.run(duration_cmd, capture_output=True, text=True)
+                return float(result.stdout.strip()) if result.stdout.strip() else 0
+
+            duration = await loop.run_in_executor(None, get_duration)
+
+            if duration <= 0:
+                logger.warning("Could not determine video duration")
+                return {'success': False, 'error': 'Could not determine duration', 'file_path': file_path}
+
+            # Calculate target bitrate (in kbps)
+            # Target size in kilobits, minus 10% for audio
+            target_total_bitrate = (target_size_mb * 8 * 1024 * 0.9) / duration
+            video_bitrate = int(target_total_bitrate * 0.9)  # 90% for video
+            audio_bitrate = 128  # 128 kbps for audio
+
+            # Generate compressed filename
+            base, ext = os.path.splitext(file_path)
+            compressed_path = f"{base}_compressed{ext}"
+
+            # Compress with ffmpeg
+            compress_cmd = [
+                'ffmpeg', '-i', file_path,
+                '-c:v', 'libx264', '-preset', 'fast',
+                '-b:v', f'{video_bitrate}k',
+                '-c:a', 'aac', '-b:a', f'{audio_bitrate}k',
+                '-y',  # Overwrite output
+                compressed_path
+            ]
+
+            logger.info(f"Compressing video from {current_size_mb:.1f}MB to ~{target_size_mb}MB")
+
+            if progress_callback:
+                await progress_callback({'status': 'compressing', 'target_mb': target_size_mb})
+
+            def run_compression():
+                subprocess.run(compress_cmd, capture_output=True)
+
+            await loop.run_in_executor(None, run_compression)
+
+            if os.path.exists(compressed_path):
+                new_size_mb = os.path.getsize(compressed_path) / (1024 * 1024)
+                logger.info(f"Compression complete: {current_size_mb:.1f}MB -> {new_size_mb:.1f}MB")
+
+                # Remove original, keep compressed
+                os.remove(file_path)
+
+                return {
+                    'success': True,
+                    'compressed': True,
+                    'file_path': compressed_path,
+                    'original_size_mb': round(current_size_mb, 2),
+                    'new_size_mb': round(new_size_mb, 2)
+                }
+            else:
+                logger.error("Compression failed, compressed file not found")
+                return {'success': False, 'error': 'Compression failed', 'file_path': file_path}
+
+        except Exception as e:
+            logger.error(f"Compression error: {e}")
+            return {'success': False, 'error': str(e), 'file_path': file_path}
+
