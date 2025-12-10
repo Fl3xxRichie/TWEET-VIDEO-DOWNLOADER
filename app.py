@@ -17,7 +17,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import signal
 import sys
-from queue_manager import download_queue
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -42,7 +41,6 @@ except Exception as e:
 # Global application instance
 application = None
 cleanup_task = None
-queue_task = None
 
 async def safe_edit_message(message_or_query, text: str, reply_markup=None, parse_mode=None):
     """
@@ -121,54 +119,11 @@ async def cleanup_scheduler():
         except Exception as e:
             logger.error(f"Error during scheduled cleanup: {e}")
 
-async def queue_processor():
-    """Process downloads from the queue"""
-    logger.info("Queue processor started")
-    while True:
-        try:
-            await asyncio.sleep(1)  # Check every second
+# NOTE: Queue processor removed to reduce Redis API calls
+# Downloads now process directly in handle_quality_selection
 
-            # Debug: Check queue status periodically
-            queue_len = download_queue.get_queue_length()
-            if queue_len > 0:
-                logger.info(f"Queue has {queue_len} pending items, attempting to get next...")
-
-            # Get next request from queue
-            request = download_queue.get_next()
-            if not request:
-                continue
-
-            logger.info(f"Processing queued download for user {request['user_id']}")
-
-            # Process the download (we need to trigger the actual download logic here)
-            # Since handle_quality_selection logic is coupled with telegram updates,
-            # we'll need to refactor slightly or trigger the download from here.
-            # Ideally, the queue manager works best if we separate the download logic completely.
-            # But for this implementation, we can use the stored data to call do_download.
-
-            # However, we need the context/bot to send messages.
-            # We have access to the global 'application' object.
-
-            if not application:
-                logger.warning("Application not initialized, skipping queue item")
-                continue
-
-            asyncio.create_task(process_queued_download(request))
-
-        except asyncio.CancelledError:
-            logger.info("Queue processor cancelled")
-            break
-        except Exception as e:
-            logger.error(f"Error in queue processor: {e}", exc_info=True)
-            await asyncio.sleep(5)  # Wait on error
-
-async def process_queued_download(request):
-    """Execute the actual download for a queued request"""
-    user_id = request['user_id']
-    chat_id = request['chat_id']
-    url = request['url']
-    quality = request['quality']
-    message_id = request.get('message_id')
+async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None):
+    """Execute the actual download for a user request"""
 
     try:
         if not application:
@@ -302,20 +257,17 @@ async def process_queued_download(request):
             await progress_message.edit_text(f"❌ Download failed: {error_msg}")
 
     except Exception as e:
-        logger.error(f"Error in process_queued_download: {e}", exc_info=True)
+        logger.error(f"Error in process_download: {e}", exc_info=True)
         try:
              if progress_message:
                 await progress_message.edit_text("❌ An unexpected error occurred during processing.")
         except:
             pass
-    finally:
-        # Mark complete in queue manager so we can process next
-        download_queue.mark_complete(user_id)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
-    global application, cleanup_task, queue_task
+    global application, cleanup_task
 
     # Startup
     logger.info("Starting application lifespan...")
@@ -330,10 +282,6 @@ async def lifespan(app: FastAPI):
         # Start cleanup task
         cleanup_task = asyncio.create_task(cleanup_scheduler())
         logger.info("Started background cleanup task")
-
-        # Start queue processor
-        queue_task = asyncio.create_task(queue_processor())
-        logger.info("Started background queue processor")
 
         # Set webhook if configured, otherwise start polling
         if Config.WEBHOOK_URL:
@@ -388,15 +336,6 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
             logger.info("Stopped background cleanup task")
-
-        # Cancel queue task
-        if queue_task:
-            queue_task.cancel()
-            try:
-                await queue_task
-            except asyncio.CancelledError:
-                pass
-            logger.info("Stopped background queue task")
 
         # Stop polling if it was running
         if polling_task:
@@ -707,36 +646,15 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             # Save as last used quality
             user_prefs.set_preference(query.from_user.id, 'quality', quality)
 
-            # Update message to show adding to queue (using safe_edit_message for photo compatibility)
-            await safe_edit_message(query, f"⏳ Adding to download queue...")
-
-            # Add to queue
-            queue_result = download_queue.add_to_queue(
+            # Process download directly (no queue - reduces Redis API calls)
+            # Run in background so we don't block the callback response
+            asyncio.create_task(process_download(
                 user_id=query.from_user.id,
                 chat_id=query.message.chat_id,
                 url=url,
                 quality=quality,
                 message_id=query.message.message_id
-            )
-
-            if queue_result['queued']:
-                position = queue_result['position']
-                await safe_edit_message(
-                    query,
-                    f"✅ Added to queue!\n\n"
-                    f"🔢 Position: {position}\n"
-                    f"⏳ Your download will start shortly."
-                )
-                logger.info(f"Queued download for user {query.from_user.id} at pos {position}")
-            else:
-                # If queue failed (e.g. Redis down), process immediately
-                logger.warning(f"Queue addition failed, processing immediately for user {query.from_user.id}")
-                request = queue_result['request']
-                # Pass message_id so it can edit the loading message
-                request['message_id'] = query.message.message_id
-
-                # We need to run this in background so we don't block the callback
-                asyncio.create_task(process_queued_download(request))
+            ))
 
             # Clean up URL from cache
             redis_cache.delete(url_id)
