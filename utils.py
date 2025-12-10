@@ -13,6 +13,9 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+# Environment prefix to separate local and production data
+ENV = os.getenv('ENVIRONMENT', 'development')
+
 class RedisCache:
     """Handles caching data in Redis."""
     def __init__(self):
@@ -195,7 +198,7 @@ def parse_tweet_id(url: str) -> Optional[str]:
 def check_rate_limit(user_id: int) -> bool:
     """Check if user has exceeded rate limit using Redis or in-memory fallback"""
     now = datetime.now()
-    key = f"rate_limit:{user_id}"
+    key = f"rate_limit:{ENV}:{user_id}"  # Environment-prefixed key
     user_data = redis_cache.get(key)
 
     if user_data and isinstance(user_data, dict):
@@ -233,11 +236,13 @@ def check_rate_limit(user_id: int) -> bool:
 class UserPreferences:
     """Handles storage and retrieval of user preferences using Redis"""
 
-    PREFS_KEY_PREFIX = "user_prefs:"
+    # Use environment-prefixed keys to separate local and production
+    PREFS_KEY_PREFIX = f"user_prefs:{ENV}:"
 
     def __init__(self):
         # Memory fallback for when Redis is unavailable
         self._memory_prefs: Dict[int, Dict[str, Any]] = {}
+        logger.info(f"User preferences initialized with ENV={ENV}, prefix={self.PREFS_KEY_PREFIX}")
 
     def _get_key(self, user_id: int) -> str:
         """Generate Redis key for user preferences"""

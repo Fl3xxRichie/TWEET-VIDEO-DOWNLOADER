@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import json
 import logging
 from typing import Dict, Any, Optional, List
@@ -7,6 +8,9 @@ import redis
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# Environment prefix to separate local and production data
+ENV = os.getenv('ENVIRONMENT', 'development')
 
 
 class RedisStatsDB:
@@ -70,7 +74,8 @@ _redis_stats_db = RedisStatsDB()
 class UserStatsDB:
     """Handles storage and retrieval of user statistics using Redis"""
 
-    STATS_KEY_PREFIX = "user_stats:"
+    # Use environment-prefixed keys to separate local and production
+    STATS_KEY_PREFIX = f"user_stats:{ENV}:"
 
     def __init__(self):
         self._redis = _redis_stats_db.client
@@ -78,6 +83,8 @@ class UserStatsDB:
 
         if not self._redis:
             logger.warning("Redis not available, using in-memory fallback for stats (NOT PERSISTENT)")
+        else:
+            logger.info(f"User stats DB initialized with ENV={ENV}, prefix={self.STATS_KEY_PREFIX}")
 
     def _get_key(self, user_id: int) -> str:
         """Generate Redis key for user stats"""

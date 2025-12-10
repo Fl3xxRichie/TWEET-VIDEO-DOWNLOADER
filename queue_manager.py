@@ -2,6 +2,7 @@
 """
 Queue Manager for handling download requests using Redis
 """
+import os
 import json
 import logging
 import asyncio
@@ -11,18 +12,23 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+# Environment prefix to separate local and production data
+ENV = os.getenv('ENVIRONMENT', 'development')
+
 
 class DownloadQueue:
     """Redis-based download queue for managing concurrent downloads"""
 
-    QUEUE_KEY = "download_queue:pending"
-    PROCESSING_KEY = "download_queue:processing"
+    # Use environment-based key prefixes to avoid conflicts between local and production
+    QUEUE_KEY = f"download_queue:{ENV}:pending"
+    PROCESSING_KEY = f"download_queue:{ENV}:processing"
     MAX_CONCURRENT = 3  # Maximum concurrent downloads
 
     def __init__(self):
         self._redis = None
         self._connect_redis()
         self._processing_count = 0
+        logger.info(f"Queue manager initialized with ENV={ENV}, keys: {self.QUEUE_KEY}, {self.PROCESSING_KEY}")
 
     def _connect_redis(self):
         """Connect to Redis"""
@@ -102,12 +108,22 @@ class DownloadQueue:
     def get_next(self) -> Optional[Dict[str, Any]]:
         """Get the next request from the queue"""
         if not self._redis:
+            logger.debug("get_next: No Redis connection")
             return None
 
+        request_json = None
         try:
             # Check if we can process more
             processing_count = self._redis.llen(self.PROCESSING_KEY)
+            queue_count = self._redis.llen(self.QUEUE_KEY)
+
+            logger.info(f"get_next: queue={queue_count}, processing={processing_count}, max={self.MAX_CONCURRENT}")
+
             if processing_count >= self.MAX_CONCURRENT:
+                logger.info(f"get_next: Too many processing ({processing_count} >= {self.MAX_CONCURRENT})")
+                return None
+
+            if queue_count == 0:
                 return None
 
             # Pop from pending, push to processing
@@ -115,16 +131,31 @@ class DownloadQueue:
             if not request_json:
                 return None
 
+            logger.info(f"get_next: Popped item from queue: {request_json[:100]}...")
+
             request = json.loads(request_json)
             request['status'] = 'processing'
             request['started_at'] = datetime.now().isoformat()
 
             self._redis.rpush(self.PROCESSING_KEY, json.dumps(request))
 
+            logger.info(f"get_next: Got request for user {request.get('user_id')}")
+
             return request
 
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding queue item: {e}, raw data: {request_json}")
+            # Don't re-add corrupt data, just log and continue
+            return None
         except Exception as e:
-            logger.error(f"Error getting next from queue: {e}")
+            logger.error(f"Error getting next from queue: {e}", exc_info=True)
+            # If we popped an item but failed to process it, try to put it back
+            if request_json:
+                try:
+                    self._redis.lpush(self.QUEUE_KEY, request_json)
+                    logger.info("Re-added item to queue after error")
+                except Exception as re_add_error:
+                    logger.error(f"Failed to re-add item to queue: {re_add_error}")
             return None
 
     def mark_complete(self, user_id: int) -> bool:

@@ -44,6 +44,70 @@ application = None
 cleanup_task = None
 queue_task = None
 
+async def safe_edit_message(message_or_query, text: str, reply_markup=None, parse_mode=None):
+    """
+    Safely edit a message, handling both text messages and media messages with captions.
+
+    Args:
+        message_or_query: Either a Message object or a CallbackQuery object
+        text: The new text/caption content
+        reply_markup: Optional InlineKeyboardMarkup
+        parse_mode: Optional parse mode (e.g., 'Markdown')
+
+    Returns:
+        The edited message, or None if editing failed
+    """
+    try:
+        # If it's a CallbackQuery, get the message from it
+        if hasattr(message_or_query, 'message'):
+            message = message_or_query.message
+            is_callback = True
+        else:
+            message = message_or_query
+            is_callback = False
+
+        # Check if the message has media (photo, video, etc.)
+        has_media = bool(
+            getattr(message, 'photo', None) or
+            getattr(message, 'video', None) or
+            getattr(message, 'animation', None) or
+            getattr(message, 'document', None) or
+            getattr(message, 'audio', None)
+        )
+
+        if has_media:
+            # Use edit_caption for media messages
+            if is_callback:
+                return await message_or_query.edit_message_caption(
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            else:
+                return await message.edit_caption(
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+        else:
+            # Use edit_text for text messages
+            if is_callback:
+                return await message_or_query.edit_message_text(
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            else:
+                return await message.edit_text(
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+    except Exception as e:
+        logger.warning(f"Failed to edit message: {e}")
+        return None
+
+
 async def cleanup_scheduler():
     """Periodically clean up old files."""
     while True:
@@ -64,6 +128,11 @@ async def queue_processor():
         try:
             await asyncio.sleep(1)  # Check every second
 
+            # Debug: Check queue status periodically
+            queue_len = download_queue.get_queue_length()
+            if queue_len > 0:
+                logger.info(f"Queue has {queue_len} pending items, attempting to get next...")
+
             # Get next request from queue
             request = download_queue.get_next()
             if not request:
@@ -81,6 +150,7 @@ async def queue_processor():
             # We have access to the global 'application' object.
 
             if not application:
+                logger.warning("Application not initialized, skipping queue item")
                 continue
 
             asyncio.create_task(process_queued_download(request))
@@ -89,7 +159,7 @@ async def queue_processor():
             logger.info("Queue processor cancelled")
             break
         except Exception as e:
-            logger.error(f"Error in queue processor: {e}")
+            logger.error(f"Error in queue processor: {e}", exc_info=True)
             await asyncio.sleep(5)  # Wait on error
 
 async def process_queued_download(request):
@@ -108,23 +178,19 @@ async def process_queued_download(request):
         bot = application.bot
         logger.info(f"Starting ID-based download execution for user {user_id}")
 
-        # Initial status update
-        progress_message = None
+        # Initial status update - always send a new text message for progress
+        # This avoids issues with editing photo messages that have captions
+        progress_message = await bot.send_message(
+            chat_id=chat_id,
+            text=f"🚀 Processing your download in {quality.upper()} quality..."
+        )
+
+        # Delete the old message with the photo/quality selection if possible
         if message_id:
             try:
-                progress_message = await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"🚀 Processing your download in {quality.upper()} quality..."
-                )
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
             except Exception as e:
-                logger.warning(f"Could not edit message: {e}")
-
-        if not progress_message:
-            progress_message = await bot.send_message(
-                chat_id=chat_id,
-                text=f"🚀 Processing your download in {quality.upper()} quality..."
-            )
+                logger.warning(f"Could not delete old message: {e}")
 
         async def progress_callback(progress_info):
             """Callback to update progress"""
@@ -641,8 +707,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             # Save as last used quality
             user_prefs.set_preference(query.from_user.id, 'quality', quality)
 
-            # Update message to show adding to queue
-            await query.edit_message_text(f"⏳ Adding to download queue...")
+            # Update message to show adding to queue (using safe_edit_message for photo compatibility)
+            await safe_edit_message(query, f"⏳ Adding to download queue...")
 
             # Add to queue
             queue_result = download_queue.add_to_queue(
@@ -655,7 +721,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
 
             if queue_result['queued']:
                 position = queue_result['position']
-                await query.edit_message_text(
+                await safe_edit_message(
+                    query,
                     f"✅ Added to queue!\n\n"
                     f"🔢 Position: {position}\n"
                     f"⏳ Your download will start shortly."
@@ -678,7 +745,7 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"Error in handle_quality_selection: {e}", exc_info=True)
         try:
             if 'query' in locals():
-                await query.edit_message_text(f"❌ An error occurred: {str(e)}")
+                await safe_edit_message(query, f"❌ An error occurred: {str(e)}")
         except:
             pass
 
@@ -1235,6 +1302,7 @@ async def webhook_info():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/webhook")
+@app.post("/")  # Also handle POST to root path for webhook (Google Cloud Run compatibility)
 async def webhook(request: Request):
     """Handle incoming Telegram updates"""
     try:
