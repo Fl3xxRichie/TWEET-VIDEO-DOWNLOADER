@@ -185,9 +185,19 @@ Before you begin, ensure you have the following installed:
    # For local development: redis://localhost:6379/0
    # For production: Use Upstash or similar managed Redis
    REDIS_URL=redis://localhost:6379/0
+
+   # ===========================================
+   # ENVIRONMENT CONFIGURATION
+   # ===========================================
+   # Set to 'production' for production deployments
+   # Leave unset or set to 'development' for local development
+   # This separates Redis data between environments (queues, stats, rate limits)
+   ENVIRONMENT=development
    ```
 
 > ⚠️ **Important**: Redis is **required** for user statistics and preferences to persist across deployments. Without Redis, stats will reset every time your application restarts.
+
+> 💡 **Tip**: When using the same Redis instance for both local and production, the `ENVIRONMENT` variable ensures data separation. Set `ENVIRONMENT=production` on your deployed service to avoid conflicts with local development.
 
 ### Getting Your Bot Token
 
@@ -327,7 +337,7 @@ By default, the dashboard is read-only and public. To restrict access:
      --source . \
      --region us-central1 \
      --allow-unauthenticated \
-     --set-env-vars BOT_TOKEN=your_token,WEBHOOK_URL=https://your-service-url,REDIS_URL=your_redis_url
+     --set-env-vars BOT_TOKEN=your_token,WEBHOOK_URL=https://your-service-url,REDIS_URL=your_redis_url,ENVIRONMENT=production
    ```
 
 3. **Set Webhook URL** after deployment:
@@ -336,7 +346,7 @@ By default, the dashboard is read-only and public. To restrict access:
    gcloud run services update tweet-bot --set-env-vars WEBHOOK_URL=https://your-cloud-run-url
    ```
 
-> ⚠️ **Note**: Google Cloud Run uses ephemeral containers. User statistics and preferences are stored in Redis to persist across deployments.
+> ⚠️ **Note**: Google Cloud Run uses ephemeral containers. User statistics and preferences are stored in Redis to persist across deployments. Always set `ENVIRONMENT=production` to separate production data from local development.
 
 ### Railway Deployment
 
