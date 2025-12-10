@@ -40,7 +40,7 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 - **📏 File Size Control**: Automatic file size validation and compression
 - **🔄 Auto-Retry**: Intelligent retry mechanism for failed downloads
 - **📝 Comprehensive Logging**: Detailed logs for monitoring and debugging
-- **🔒 Redis Integration**: Utilizes Redis for efficient rate limiting and session management
+- **🔒 Redis Integration**: Utilizes Redis for rate limiting, user statistics, and preferences (required for persistent storage)
 - **🌐 Multi-Format Support**: Various Twitter/X URL formats supported
 
 ### Deployment & Scaling
@@ -91,6 +91,9 @@ Before you begin, ensure you have the following installed:
    ```bash
    python -m venv venv
 
+   # On Windows Bash
+   source venv/Scripts/activate
+   
    # On Windows
    venv\Scripts\activate
 
@@ -171,11 +174,15 @@ Before you begin, ensure you have the following installed:
    CLEANUP_INTERVAL_HOURS=1
 
    # ===========================================
-   # REDIS CONFIGURATION
+   # REDIS CONFIGURATION (Required for persistent storage)
    # ===========================================
-   # Redis connection URL (leave empty to disable Redis)
+   # Redis connection URL - REQUIRED for stats to persist across deployments
+   # For local development: redis://localhost:6379/0
+   # For production: Use Upstash or similar managed Redis
    REDIS_URL=redis://localhost:6379/0
    ```
+
+> ⚠️ **Important**: Redis is **required** for user statistics and preferences to persist across deployments. Without Redis, stats will reset every time your application restarts.
 
 ### Getting Your Bot Token
 
@@ -268,6 +275,31 @@ If you're deploying to a live server and require Redis for rate limiting or sess
   docker run -d --name my-redis -p 6379:6379 redis/redis-stack-server:latest
   ```
   Ensure your `REDIS_URL` in the `.env` file points to your Redis instance (e.g., `redis://your-server-ip:6379/0`).
+
+### Google Cloud Deployment
+
+1. **Prerequisites**
+   - Google Cloud account with billing enabled
+   - `gcloud` CLI installed and configured
+   - Redis instance (Upstash recommended for serverless)
+
+2. **Deploy to Cloud Run**
+   ```bash
+   # Build and deploy
+   gcloud run deploy tweet-bot \
+     --source . \
+     --region us-central1 \
+     --allow-unauthenticated \
+     --set-env-vars BOT_TOKEN=your_token,WEBHOOK_URL=https://your-service-url,REDIS_URL=your_redis_url
+   ```
+
+3. **Set Webhook URL** after deployment:
+   ```bash
+   # Get your Cloud Run URL and update WEBHOOK_URL env var
+   gcloud run services update tweet-bot --set-env-vars WEBHOOK_URL=https://your-cloud-run-url
+   ```
+
+> ⚠️ **Note**: Google Cloud Run uses ephemeral containers. User statistics and preferences are stored in Redis to persist across deployments.
 
 ### Railway Deployment
 
@@ -391,7 +423,7 @@ tweet-video-downloader/
 ├── 📄 video_downloader.py     # Core video download functionality
 ├── 📄 config.py               # Configuration management
 ├── 📄 utils.py                # Utility functions and helpers
-├── 📄 database.py             # User data and statistics management
+├── 📄 database.py             # User statistics storage (Redis-backed)
 ├── 📄 rate_limiter.py         # Rate limiting implementation
 ├── 📄 redis_client.py         # Redis connection and utilities
 ├── 📄 logger.py               # Logging configuration

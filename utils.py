@@ -231,58 +231,57 @@ def check_rate_limit(user_id: int) -> bool:
     return True
 
 class UserPreferences:
-    """Handles storage and retrieval of user preferences"""
+    """Handles storage and retrieval of user preferences using Redis"""
+
+    PREFS_KEY_PREFIX = "user_prefs:"
+
     def __init__(self):
-        self._prefs_file = Path('user_prefs.json')
-        self._prefs: Dict[int, Dict[str, Any]] = self._load_prefs()
+        # Memory fallback for when Redis is unavailable
+        self._memory_prefs: Dict[int, Dict[str, Any]] = {}
 
-    def _load_prefs(self) -> Dict[int, Dict[str, Any]]:
-        """Load preferences from JSON file"""
-        if not self._prefs_file.exists():
-            return {}
-        try:
-            with open(self._prefs_file, 'r') as f:
-                data = json.load(f)
-                # Convert string keys to int for user IDs
-                return {int(k): v for k, v in data.items()}
-        except Exception as e:
-            logger.error(f"Failed to load preferences: {e}")
-            return {}
+    def _get_key(self, user_id: int) -> str:
+        """Generate Redis key for user preferences"""
+        return f"{self.PREFS_KEY_PREFIX}{user_id}"
 
-    def _save_prefs(self) -> None:
-        """Save preferences to JSON file"""
-        try:
-            with open(self._prefs_file, 'w') as f:
-                # Convert int keys to strings for JSON serialization
-                data = {str(k): v for k, v in self._prefs.items()}
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save preferences: {e}")
+    def _load_user_prefs(self, user_id: int) -> Dict[str, Any]:
+        """Load preferences for a user from Redis"""
+        prefs = redis_cache.get(self._get_key(user_id))
+        if prefs and isinstance(prefs, dict):
+            return prefs
+        return self._memory_prefs.get(user_id, {})
+
+    def _save_user_prefs(self, user_id: int, prefs: Dict[str, Any]) -> None:
+        """Save preferences for a user to Redis"""
+        redis_cache.set(self._get_key(user_id), prefs)
+        self._memory_prefs[user_id] = prefs
 
     def get_preference(self, user_id: int, key: str, default: Any = None) -> Any:
         """Get a user preference"""
-        return self._prefs.get(user_id, {}).get(key, default)
+        prefs = self._load_user_prefs(user_id)
+        return prefs.get(key, default)
 
     def set_preference(self, user_id: int, key: str, value: Any) -> None:
         """Set a user preference"""
-        if user_id not in self._prefs:
-            self._prefs[user_id] = {}
-        self._prefs[user_id][key] = value
-        self._save_prefs()
+        prefs = self._load_user_prefs(user_id)
+        prefs[key] = value
+        self._save_user_prefs(user_id, prefs)
         logger.debug(f"Set preference for user {user_id}: {key}={value}")
 
     def get_all_preferences(self, user_id: int) -> Dict[str, Any]:
         """Get all preferences for a user"""
-        return self._prefs.get(user_id, {}).copy()
+        return self._load_user_prefs(user_id).copy()
 
     def delete_user_data(self, user_id: int) -> bool:
         """Delete all user data (GDPR compliance)"""
-        if user_id in self._prefs:
-            del self._prefs[user_id]
-            self._save_prefs()
+        try:
+            redis_cache.delete(self._get_key(user_id))
+            if user_id in self._memory_prefs:
+                del self._memory_prefs[user_id]
             logger.info(f"Deleted preferences for user {user_id}")
             return True
-        return False
+        except Exception as e:
+            logger.error(f"Error deleting user preferences: {e}")
+            return False
 
 # Initialize preferences storage
 user_prefs = UserPreferences()
