@@ -1,0 +1,41 @@
+2025-12-10 13:17:14,877 - utils - INFO - _connect_redis:25 - Connecting to Redis...
+2025-12-10 13:17:16,110 - utils - INFO - _connect_redis:55 - Successfully connected to Redis.
+2025-12-10 13:17:16,476 - database - INFO - _connect_redis:22 - Connecting to Redis for stats storage...
+2025-12-10 13:17:17,658 - database - INFO - _connect_redis:48 - Successfully connected to Redis for stats storage.
+2025-12-10 13:17:17,661 - __main__ - INFO - main:1311 - Starting application in polling mode with web server on port 8000
+2025-12-10 13:17:17,661 - __main__ - INFO - main:1312 - Dashboard will be available at http://localhost:8000/dashboard
+INFO:     Started server process [28976]
+INFO:     Waiting for application startup.
+2025-12-10 13:17:17,692 - __main__ - INFO - lifespan:255 - Starting application lifespan...
+2025-12-10 13:17:17,692 - __main__ - INFO - setup_application:1137 - Setting up Telegram application...
+2025-12-10 13:17:17,692 - __main__ - ERROR - lifespan:308 - Failed to initialize application: AsyncClient.__init__() got an unexpected keyword argument 'proxies'
+ERROR:    Traceback (most recent call last):
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\starlette\routing.py", line 693, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+  File "C:\Python312\Lib\contextlib.py", line 210, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\Documents\GitHub\TWEET-VIDEO-DOWNLOADER\app.py", line 260, in lifespan
+    application = setup_application()
+                  ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\Documents\GitHub\TWEET-VIDEO-DOWNLOADER\app.py", line 1139, in setup_application
+    application = Application.builder().token(Config.BOT_TOKEN).build()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\telegram\ext\_applicationbuilder.py", line 289, in build
+    bot: Bot = self._build_ext_bot()  # build a bot
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\telegram\ext\_applicationbuilder.py", line 259, in _build_ext_bot
+    request=self._build_request(get_updates=False),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\telegram\ext\_applicationbuilder.py", line 240, in _build_request
+    return HTTPXRequest(
+           ^^^^^^^^^^^^^
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\telegram\request\_httpxrequest.py", line 137, in __init__
+    self._client = self._build_client()
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\USER\AppData\Roaming\Python\Python312\site-packages\telegram\request\_httpxrequest.py", line 162, in _build_client
+    return httpx.AsyncClient(**self._client_kwargs)  # type: ignore[arg-type]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: AsyncClient.__init__() got an unexpected keyword argument 'proxies'
+
+ERROR:    Application startup failed. Exiting.

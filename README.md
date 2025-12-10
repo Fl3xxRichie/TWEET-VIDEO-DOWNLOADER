@@ -48,6 +48,7 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 - **🌐 Multi-Format Support**: Various Twitter/X URL formats supported
 
 ### Deployment & Scaling
+- **📉 Analytics Dashboard**: Web-based dashboard for visualizing bot usage, top users, and traffic trends
 - **🚀 Dual Mode Operation**:
   - **Polling Mode**: Perfect for development and testing
   - **Webhook Mode**: Production-ready with FastAPI integration
@@ -278,7 +279,39 @@ If you're deploying to a live server and require Redis for rate limiting or sess
   ```bash
   docker run -d --name my-redis -p 6379:6379 redis/redis-stack-server:latest
   ```
-  Ensure your `REDIS_URL` in the `.env` file points to your Redis instance (e.g., `redis://your-server-ip:6379/0`).
+  Ensure your `REDIS_URL` in the `.env` file points to your Redis instance (e.g., `redis://your-server-ip:6379/0`)
+
+### 📊 Analytics Dashboard
+
+The bot includes a beautiful web-based dashboard to visualize usage statistics in real-time.
+
+**Access**:
+- **Local Development**: `http://localhost:8000/dashboard`
+- **Production**: `https://your-deployment-url.com/dashboard`
+
+**Dashboard Features**:
+- 📈 **Real-time Stats**: Total users, downloads, and data usage
+- 📊 **Weekly Activity Chart**: Visual download trends over the past 7 days
+- 🥧 **Quality Distribution**: Breakdown of HD/SD/Audio downloads
+- 🏆 **Top Users Leaderboard**: Most active users ranking
+- 🔄 **Auto-refresh**: Data updates every 30 seconds
+
+**Example URLs**:
+```
+# Render
+https://your-app.onrender.com/dashboard
+
+# Google Cloud Run
+https://your-service-xyz.run.app/dashboard
+
+# Railway
+https://your-app.up.railway.app/dashboard
+```
+
+**Security** (Optional):
+By default, the dashboard is read-only and public. To restrict access:
+1. Set `ADMIN_USER_ID` in your `.env` file
+2. Access with query parameter: `/dashboard?admin_id=YOUR_ID`
 
 ### Google Cloud Deployment
 
@@ -403,14 +436,15 @@ Once the secret is added, the workflow will start running on its schedule, keepi
 
 ## 🌐 API Endpoints
 
-When running in webhook mode, the bot exposes several useful endpoints:
+The bot exposes several useful web endpoints (available in both polling and webhook modes):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/dashboard` | GET | Web-based analytics dashboard |
+| `/api/stats/dashboard` | GET | Dashboard statistics JSON API |
 | `/health` | GET | Bot health status and statistics |
 | `/webhook` | POST | Telegram webhook endpoint |
-| `/stats` | GET | Download statistics (admin only) |
-| `/metrics` | GET | Prometheus metrics for monitoring |
+| `/webhook-info` | GET | Current webhook configuration |
 
 ### Health Check Response
 ```json

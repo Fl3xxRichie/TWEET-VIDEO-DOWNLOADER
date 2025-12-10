@@ -1,4 +1,5 @@
 python-telegram-bot>=20.0
+httpx>=0.25.0,<0.28
 yt-dlp>=2023.12.30
 fastapi>=0.104.0
 uvicorn>=0.24.0

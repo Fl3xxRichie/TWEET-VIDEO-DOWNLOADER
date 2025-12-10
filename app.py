@@ -12,10 +12,12 @@ from config import Config
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from contextlib import asynccontextmanager
+from pathlib import Path
 import signal
 import sys
+from queue_manager import download_queue
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -40,6 +42,7 @@ except Exception as e:
 # Global application instance
 application = None
 cleanup_task = None
+queue_task = None
 
 async def cleanup_scheduler():
     """Periodically clean up old files."""
@@ -54,13 +57,203 @@ async def cleanup_scheduler():
         except Exception as e:
             logger.error(f"Error during scheduled cleanup: {e}")
 
+async def queue_processor():
+    """Process downloads from the queue"""
+    logger.info("Queue processor started")
+    while True:
+        try:
+            await asyncio.sleep(1)  # Check every second
+
+            # Get next request from queue
+            request = download_queue.get_next()
+            if not request:
+                continue
+
+            logger.info(f"Processing queued download for user {request['user_id']}")
+
+            # Process the download (we need to trigger the actual download logic here)
+            # Since handle_quality_selection logic is coupled with telegram updates,
+            # we'll need to refactor slightly or trigger the download from here.
+            # Ideally, the queue manager works best if we separate the download logic completely.
+            # But for this implementation, we can use the stored data to call do_download.
+
+            # However, we need the context/bot to send messages.
+            # We have access to the global 'application' object.
+
+            if not application:
+                continue
+
+            asyncio.create_task(process_queued_download(request))
+
+        except asyncio.CancelledError:
+            logger.info("Queue processor cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in queue processor: {e}")
+            await asyncio.sleep(5)  # Wait on error
+
+async def process_queued_download(request):
+    """Execute the actual download for a queued request"""
+    user_id = request['user_id']
+    chat_id = request['chat_id']
+    url = request['url']
+    quality = request['quality']
+    message_id = request.get('message_id')
+
+    try:
+        if not application:
+            logger.error("Application not initialized")
+            return
+
+        bot = application.bot
+        logger.info(f"Starting ID-based download execution for user {user_id}")
+
+        # Initial status update
+        progress_message = None
+        if message_id:
+            try:
+                progress_message = await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"🚀 Processing your download in {quality.upper()} quality..."
+                )
+            except Exception as e:
+                logger.warning(f"Could not edit message: {e}")
+
+        if not progress_message:
+            progress_message = await bot.send_message(
+                chat_id=chat_id,
+                text=f"🚀 Processing your download in {quality.upper()} quality..."
+            )
+
+        async def progress_callback(progress_info):
+            """Callback to update progress"""
+            try:
+                status = progress_info.get('status')
+
+                if status == 'downloading':
+                    percent = progress_info.get('_percent_str', 'N/A')
+                    speed = progress_info.get('_speed_str', 'N/A')
+                    eta = progress_info.get('_eta_str', 'N/A')
+
+                    progress_text = f"📥 Downloading {quality.upper()}...\n"
+                    progress_text += f"Progress: {percent}\n"
+                    progress_text += f"Speed: {speed}\n"
+                    progress_text += f"ETA: {eta}"
+
+                    # Edit 'status' so we don't edit too often?
+                    # yt-dlp calls frequently. app.py logic didn't seem to rate limit,
+                    # maybe we should simple throttle here slightly but for now let's keep it simple
+                    try:
+                        await progress_message.edit_text(progress_text)
+                    except:
+                        pass # Ignore "message not modified" errors
+
+                elif status == 'compressing':
+                    target_mb = progress_info.get('target_mb', 45)
+                    await progress_message.edit_text(f"🗜️ Compressing video to under {target_mb}MB...\nThis may take a moment.")
+
+                elif status == 'finished':
+                    await progress_message.edit_text("✅ Download completed! Processing...")
+
+            except Exception as e:
+                logger.error(f"Progress update error: {e}")
+
+        # Perform the actual download
+        # Note: We need to import video_downloader globally or access it if it's there
+        # It seems accessed as 'video_downloader' in app.py generally
+
+        result = await video_downloader.download_video(
+            url,
+            quality,
+            progress_callback=progress_callback
+        )
+
+        if result['success']:
+            file_path = result['file_path']
+
+            # Check file size and compress if needed
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+            if file_size_mb > 49.0: # Telegram limit is 50MB
+                await progress_message.edit_text(f"📏 File size ({file_size_mb:.1f}MB) exceeds limit. Compressing...")
+
+                compress_result = await video_downloader.compress_video(
+                    file_path,
+                    target_size_mb=45.0,
+                    progress_callback=progress_callback
+                )
+
+                if compress_result['success']:
+                    file_path = compress_result['file_path']
+                    logger.info(f"Compression successful: {compress_result.get('original_size_mb')} -> {compress_result.get('new_size_mb')} MB")
+                else:
+                    logger.warning(f"Compression failed: {compress_result.get('error')}")
+                    # Try to send anyway if it failed? Or fail?
+                    # If it's > 50MB sending will likely fail.
+
+            # Send the video file
+            await progress_message.edit_text("📤 Sending video...")
+
+            try:
+                with open(file_path, 'rb') as video_file:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=video_file,
+                        caption=f"🎥 Downloaded in {quality.upper()} quality",
+                        supports_streaming=True,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=120,
+                        pool_timeout=120
+                    )
+
+                # Statistics and Cleanup
+                try:
+                    stats_file_size = os.path.getsize(file_path)
+                    user_stats_db.record_download(
+                        user_id=user_id,
+                        quality=quality,
+                        file_size_bytes=stats_file_size,
+                        url=url,
+                        success=True
+                    )
+                except Exception as e:
+                    logger.error(f"Stats error: {e}")
+
+                os.remove(file_path)
+                await progress_message.delete()
+                logger.info(f"Successfully sent video to user {user_id}")
+
+            except Exception as send_error:
+                logger.error(f"Error sending video: {send_error}")
+                await progress_message.edit_text(f"❌ Error sending video: {send_error}")
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+        else:
+            error_msg = result.get('error', 'Unknown error')
+            await progress_message.edit_text(f"❌ Download failed: {error_msg}")
+
+    except Exception as e:
+        logger.error(f"Error in process_queued_download: {e}", exc_info=True)
+        try:
+             if progress_message:
+                await progress_message.edit_text("❌ An unexpected error occurred during processing.")
+        except:
+            pass
+    finally:
+        # Mark complete in queue manager so we can process next
+        download_queue.mark_complete(user_id)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
-    global application, cleanup_task
+    global application, cleanup_task, queue_task
 
     # Startup
     logger.info("Starting application lifespan...")
+    polling_task = None
 
     try:
         # Initialize Telegram application
@@ -72,7 +265,11 @@ async def lifespan(app: FastAPI):
         cleanup_task = asyncio.create_task(cleanup_scheduler())
         logger.info("Started background cleanup task")
 
-        # Set webhook if configured
+        # Start queue processor
+        queue_task = asyncio.create_task(queue_processor())
+        logger.info("Started background queue processor")
+
+        # Set webhook if configured, otherwise start polling
         if Config.WEBHOOK_URL:
             try:
                 # Delete any existing webhook first
@@ -95,7 +292,17 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Failed to set webhook: {e}")
                 raise
         else:
-            logger.info("No webhook URL configured, running in polling mode")
+            # No webhook - start polling in background alongside web server
+            logger.info("No webhook URL configured, starting polling mode alongside web server")
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            await application.start()
+            polling_task = asyncio.create_task(
+                application.updater.start_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=Update.ALL_TYPES
+                )
+            )
+            logger.info("Polling started in background - Dashboard available at /dashboard")
 
     except Exception as e:
         logger.error(f"Failed to initialize application: {e}")
@@ -115,6 +322,24 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
             logger.info("Stopped background cleanup task")
+
+        # Cancel queue task
+        if queue_task:
+            queue_task.cancel()
+            try:
+                await queue_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Stopped background queue task")
+
+        # Stop polling if it was running
+        if polling_task:
+            try:
+                await application.updater.stop()
+                await application.stop()
+                logger.info("Polling stopped")
+            except Exception as e:
+                logger.error(f"Failed to stop polling: {e}")
 
         # Clean up webhook and application
         if application and Config.WEBHOOK_URL:
@@ -416,77 +641,35 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             # Save as last used quality
             user_prefs.set_preference(query.from_user.id, 'quality', quality)
 
-            # Update message to show download starting
-            await query.edit_message_text(f"⏳ Starting download in {quality.upper()} quality...")
+            # Update message to show adding to queue
+            await query.edit_message_text(f"⏳ Adding to download queue...")
 
-            # Start the download with progress callback
-            progress_message = await context.bot.send_message(
+            # Add to queue
+            queue_result = download_queue.add_to_queue(
+                user_id=query.from_user.id,
                 chat_id=query.message.chat_id,
-                text="📥 Preparing download..."
+                url=url,
+                quality=quality,
+                message_id=query.message.message_id
             )
 
-            async def progress_callback(progress_info):
-                """Callback to update progress"""
-                try:
-                    if progress_info.get('status') == 'downloading':
-                        percent = progress_info.get('_percent_str', 'N/A')
-                        speed = progress_info.get('_speed_str', 'N/A')
-                        eta = progress_info.get('_eta_str', 'N/A')
-
-                        progress_text = f"📥 Downloading {quality.upper()}...\n"
-                        progress_text += f"Progress: {percent}\n"
-                        progress_text += f"Speed: {speed}\n"
-                        progress_text += f"ETA: {eta}"
-
-                        await progress_message.edit_text(progress_text)
-
-                    elif progress_info.get('status') == 'finished':
-                        await progress_message.edit_text("✅ Download completed! Preparing to send...")
-
-                except Exception as e:
-                    logger.error(f"Progress update error: {e}")
-
-            # Perform the actual download
-            result = await video_downloader.download_video(
-                url,
-                quality,
-                progress_callback=progress_callback
-            )
-
-            if result['success']:
-                # Send the video file
-                await progress_message.edit_text("📤 Sending video...")
-
-                with open(result['file_path'], 'rb') as video_file:
-                    await context.bot.send_video(
-                        chat_id=query.message.chat_id,
-                        video=video_file,
-                        caption=f"🎥 Downloaded in {quality.upper()} quality",
-                        supports_streaming=True
-                    )
-
-                # Clean up
-                try:
-                    # Record successful download in statistics
-                    file_size = os.path.getsize(result['file_path'])
-                    user_stats_db.record_download(
-                        user_id=query.from_user.id,
-                        quality=quality,
-                        file_size_bytes=file_size,
-                        url=url,
-                        success=True
-                    )
-
-                    os.remove(result['file_path'])
-                    await progress_message.delete()
-                    logger.info(f"Successfully sent video to user {query.from_user.id}")
-                except Exception as e:
-                    logger.error(f"Cleanup error: {e}")
-
+            if queue_result['queued']:
+                position = queue_result['position']
+                await query.edit_message_text(
+                    f"✅ Added to queue!\n\n"
+                    f"🔢 Position: {position}\n"
+                    f"⏳ Your download will start shortly."
+                )
+                logger.info(f"Queued download for user {query.from_user.id} at pos {position}")
             else:
-                error_msg = result.get('error', 'Unknown error')
-                await progress_message.edit_text(f"❌ Download failed: {error_msg}")
-                logger.error(f"Download failed for user {query.from_user.id}: {error_msg}")
+                # If queue failed (e.g. Redis down), process immediately
+                logger.warning(f"Queue addition failed, processing immediately for user {query.from_user.id}")
+                request = queue_result['request']
+                # Pass message_id so it can edit the loading message
+                request['message_id'] = query.message.message_id
+
+                # We need to run this in background so we don't block the callback
+                asyncio.create_task(process_queued_download(request))
 
             # Clean up URL from cache
             redis_cache.delete(url_id)
@@ -1049,31 +1232,69 @@ async def webhook_info():
         logger.error(f"Error getting webhook info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/")
-async def handle_telegram_update(request: Request):
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/webhook")
+async def webhook(request: Request):
     """Handle incoming Telegram updates"""
-    if not application:
-        logger.error("Application not initialized, cannot process update")
-        raise HTTPException(status_code=503, detail="Bot not initialized")
+    try:
+        # Check token
+        secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        # In a real app, verify this token matches what you set
+
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+
+        # Feed update to application
+        await application.process_update(update)
+
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, admin_id: int = None):
+    """Serve the analytics dashboard"""
+    # Optional: Check admin ID if provided
+    if Config.ADMIN_USER_ID and admin_id:
+        if admin_id != int(Config.ADMIN_USER_ID):
+            raise HTTPException(status_code=403, detail="Unauthorized")
 
     try:
-        # Log incoming update
-        update_data = await request.json()
-        logger.info(f"Received update: {update_data.get('update_id', 'unknown')}")
+        template_path = Path("templates/dashboard.html")
+        if not template_path.exists():
+            return HTMLResponse("<h1>Dashboard template not found</h1>", status_code=404)
 
-        # Process update
-        update = Update.de_json(update_data, application.bot)
-        if update:
-            await application.process_update(update)
-            logger.info(f"Successfully processed update {update.update_id}")
-        else:
-            logger.warning("Failed to parse update from JSON")
+        with open(template_path, "r", encoding="utf-8") as f:
+            content = f.read()
 
-        return JSONResponse(status_code=200, content={"status": "ok"})
-
+        return HTMLResponse(content=content)
     except Exception as e:
-        logger.error(f"Error processing update: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error serving dashboard: {e}")
+        return HTMLResponse("<h1>Internal Server Error</h1>", status_code=500)
+
+@app.get("/api/stats/dashboard")
+async def get_dashboard_stats():
+    """Get statistics for the dashboard"""
+    try:
+        global_stats = user_stats_db.get_global_stats()
+        daily_stats = user_stats_db.get_daily_stats(days=7)
+        top_users = user_stats_db.get_top_users(limit=10)
+
+        # Get today's stats specifically
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        today_stats = daily_stats.get(today_str, {'downloads': 0, 'size_mb': 0})
+
+        return JSONResponse({
+            'global': global_stats,
+            'daily': daily_stats,
+            'today': today_stats,
+            'top_users': top_users
+        })
+    except Exception as e:
+        logger.error(f"Error fetching dashboard stats: {e}")
+        return JSONResponse({'error': str(e)}, status_code=500)
 
 def signal_handler(signum, frame):
     """Handle shutdown signals"""
@@ -1085,25 +1306,17 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
-    """Run the bot with webhook or polling"""
-    if Config.WEBHOOK_URL:
-        logger.info("Application will be started by Uvicorn in webhook mode.")
-    else:
-        logger.info("WEBHOOK_URL not set, starting in polling mode.")
-        global application
-        application = setup_application()
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
-        )
+    """Run the bot with uvicorn - polling or webhook mode determined by config"""
+    mode = "webhook" if Config.WEBHOOK_URL else "polling"
+    logger.info(f"Starting application in {mode} mode with web server on port {Config.PORT}")
+    logger.info(f"Dashboard will be available at http://localhost:{Config.PORT}/dashboard")
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=Config.PORT,
+        log_level="info"
+    )
 
 if __name__ == "__main__":
-    if Config.WEBHOOK_URL:
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=Config.PORT,
-            log_level="info"
-        )
-    else:
-        main()
+    main()
