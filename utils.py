@@ -233,6 +233,35 @@ def check_rate_limit(user_id: int) -> bool:
     logger.debug(f"Rate limit check for user {user_id}: {count}/{Config.RATE_LIMIT_PER_HOUR}")
     return True
 
+
+def get_rate_limit_status(user_id: int) -> dict:
+    """Get current rate limit status for a user (without incrementing)"""
+    now = datetime.now()
+    key = f"rate_limit:{ENV}:{user_id}"
+    user_data = redis_cache.get(key)
+
+    if user_data and isinstance(user_data, dict):
+        try:
+            window_start = datetime.fromisoformat(user_data['window_start'])
+            count = user_data['count']
+        except (KeyError, ValueError):
+            window_start = now
+            count = 0
+    else:
+        window_start = now
+        count = 0
+
+    # Reset if window expired
+    if now - window_start > timedelta(hours=1):
+        count = 0
+
+    remaining = max(0, Config.RATE_LIMIT_PER_HOUR - count)
+    return {
+        'used': count,
+        'limit': Config.RATE_LIMIT_PER_HOUR,
+        'remaining': remaining
+    }
+
 class UserPreferences:
     """Handles storage and retrieval of user preferences using Redis"""
 

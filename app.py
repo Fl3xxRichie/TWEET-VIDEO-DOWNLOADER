@@ -122,7 +122,7 @@ async def cleanup_scheduler():
 # NOTE: Queue processor removed to reduce Redis API calls
 # Downloads now process directly in handle_quality_selection
 
-async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None):
+async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None, username: str = None):
     """Execute the actual download for a user request"""
 
     try:
@@ -237,7 +237,8 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
                         quality=quality,
                         file_size_bytes=stats_file_size,
                         url=url,
-                        success=True
+                        success=True,
+                        username=username
                     )
                 except Exception as e:
                     logger.error(f"Stats error: {e}")
@@ -407,7 +408,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from utils import validate_twitter_url, check_rate_limit, user_prefs, redis_cache, format_file_size, format_timestamp, get_quality_emoji
+from utils import validate_twitter_url, check_rate_limit, get_rate_limit_status, user_prefs, redis_cache, format_file_size, format_timestamp, get_quality_emoji
 from video_downloader import VideoDownloader
 from database import user_stats_db
 
@@ -485,6 +486,12 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                         callback_data="quality_480p"
                     ),
                     InlineKeyboardButton(
+                        f"{'✅ ' if current_quality == '360p' else ''}SD (360p)",
+                        callback_data="quality_360p"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
                         f"{'✅ ' if current_quality == 'audio' else ''}Audio Only",
                         callback_data="quality_audio"
                     ),
@@ -550,24 +557,27 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
         elif data == 'menu_help':
             help_text = (
                 "❓ **Help & Usage Guide**\n\n"
-                "**How to use this bot:**\n\n"
-                "1. Send me a Twitter/X video URL\n"
+                "**Single Video Download:**\n"
+                "1. Send a Twitter/X video URL\n"
                 "2. Choose your preferred quality\n"
                 "3. Wait for the download to complete\n\n"
-                "**Supported formats:**\n"
-                "• Single video tweets\n"
-                "• HD (1080p), SD (720p/480p)\n"
+                "**📦 Batch Download (NEW!):**\n"
+                "Send multiple URLs in one message!\n"
+                "• All videos download in your default quality\n"
+                "• Set quality first with /settings\n\n"
+                "**Supported qualities:**\n"
+                "• HD (1080p) • 720p • 480p • 360p\n"
                 "• Audio only (MP3)\n\n"
                 "**Commands:**\n"
                 "/start - Main menu\n"
                 "/stats - View your statistics\n"
                 "/settings - Change preferences\n"
-                "/help - Show this help message\n"
-                "/about - About this bot\n\n"
+                "/history - Download history\n"
+                "/help - Show this help\n\n"
                 "**Tips:**\n"
-                "• Set your default quality in Settings\n"
-                "• Check your stats to see download history\n"
-                f"• Rate limit: {Config.RATE_LIMIT_PER_HOUR} downloads per hour"
+                "• ⭐ starred quality = your default\n"
+                "• Auto-retry on failed downloads\n"
+                f"• Rate limit: {Config.RATE_LIMIT_PER_HOUR}/hour"
             )
 
             keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
@@ -653,7 +663,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 chat_id=query.message.chat_id,
                 url=url,
                 quality=quality,
-                message_id=query.message.message_id
+                message_id=query.message.message_id,
+                username=query.from_user.username
             ))
 
             # Clean up URL from cache
@@ -705,15 +716,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         logger.info(f"Help command from user {update.effective_user.id}")
         await update.message.reply_text(
-            "📌 How to use this bot:\n\n"
-            "1. Send me a Twitter/X video URL\n"
-            "2. Choose your preferred quality\n"
-            "3. Wait for the download to complete\n\n"
-            "Supported formats:\n"
-            "- Single video tweets\n"
-            "- HD (1080p), SD (720p/480p)\n"
-            "- Audio only (MP3)\n\n"
-            "Use /quality to set your default preference"
+            "📌 **How to use this bot:**\n\n"
+            "**Single Video:**\n"
+            "1. Send a Twitter/X video URL\n"
+            "2. Choose quality → Download!\n\n"
+            "**📦 Batch Download:**\n"
+            "Send multiple URLs in one message!\n"
+            "Videos download in your default quality.\n\n"
+            "**Qualities:** HD • 720p • 480p • 360p • Audio\n\n"
+            "**Commands:**\n"
+            "/settings - Set default quality\n"
+            "/stats - Your download stats\n"
+            "/history - Recent downloads",
+            parse_mode='Markdown'
         )
     except Exception as e:
         logger.error(f"Error in help command: {e}", exc_info=True)
@@ -729,6 +744,9 @@ async def quality_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [
                 InlineKeyboardButton("SD (480p)", callback_data="quality_480p"),
+                InlineKeyboardButton("SD (360p)", callback_data="quality_360p"),
+            ],
+            [
                 InlineKeyboardButton("Audio Only", callback_data="quality_audio"),
             ],
             [
@@ -1006,15 +1024,47 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming Twitter URLs"""
+    """Handle incoming Twitter URLs (supports batch - multiple URLs in one message)"""
+    import re
     try:
         user_id = update.message.from_user.id
-        url = update.message.text.strip()
-        logger.info(f"URL received from user {user_id}: {url}")
+        message_text = update.message.text.strip()
+        logger.info(f"Message received from user {user_id}: {message_text[:100]}...")
 
-        if not validate_twitter_url(url):
+        # Extract all Twitter URLs from the message (batch support)
+        url_pattern = r'https?://(?:www\.)?(?:twitter|x)\.com/\S+/status/\d+'
+        urls = list(set(re.findall(url_pattern, message_text)))  # Remove duplicates
+
+        if not urls:
             await update.message.reply_text("⚠️ Please send a valid Twitter/X URL")
             return
+
+        # Check rate limit status
+        rate_status = get_rate_limit_status(user_id)
+
+        if rate_status['remaining'] <= 0:
+            await update.message.reply_text(
+                f"⚠️ Rate limit exceeded. Please try again in an hour.\n"
+                f"(Limit: {Config.RATE_LIMIT_PER_HOUR} downloads per hour)"
+            )
+            return
+
+        # For batch downloads, check if we have enough remaining
+        if len(urls) > rate_status['remaining']:
+            await update.message.reply_text(
+                f"⚠️ You have {rate_status['remaining']} downloads remaining this hour, "
+                f"but you're trying to download {len(urls)} videos.\n"
+                f"Please reduce the number of URLs or wait for your limit to reset."
+            )
+            return
+
+        # Handle batch downloads (multiple URLs)
+        if len(urls) > 1:
+            await handle_batch_urls(update, context, urls, rate_status)
+            return
+
+        # Single URL processing
+        url = urls[0]
 
         if not check_rate_limit(user_id):
             await update.message.reply_text(
@@ -1039,12 +1089,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url_id = str(abs(hash(url + str(time.time()))))  # More unique hash
         redis_cache.set(url_id, url, ex=300)  # Store for 5 minutes
 
-        # Create buttons with accurate size estimates
+        # Create buttons with accurate size estimates (now includes 360p)
         buttons = []
         for quality, label in [
             ('hd', 'HD (1080p)'),
             ('720p', 'SD (720p)'),
             ('480p', 'SD (480p)'),
+            ('360p', 'SD (360p)'),
             ('audio', 'Audio Only')
         ]:
             size_estimate = video_info['size_estimates'].get(quality, '~?')
@@ -1058,10 +1109,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             )
 
-        # Arrange buttons in 2x2 grid + cancel button
+        # Arrange buttons in grid + cancel button
         keyboard = [
             buttons[:2],
-            buttons[2:],
+            buttons[2:4],
+            [buttons[4]],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_download")]
         ]
 
@@ -1073,11 +1125,17 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             duration_str = "Unknown"
 
+        # Get updated rate status (after check_rate_limit consumed one)
+        updated_rate_status = get_rate_limit_status(user_id)
+        rate_warning = ""
+        if updated_rate_status['remaining'] <= 3:
+            rate_warning = f"\n⚠️ {updated_rate_status['remaining']} downloads remaining this hour"
+
         # Build caption with video info
         caption = (
             f"🎬 **{video_info.get('title', 'Video')}**\n\n"
             f"👤 {video_info.get('uploader', 'Unknown')}\n"
-            f"⏱️ Duration: {duration_str}\n\n"
+            f"⏱️ Duration: {duration_str}{rate_warning}\n\n"
             f"Select quality to download:"
         )
 
@@ -1116,6 +1174,118 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ An error occurred while processing your request. Please try again.")
         except:
             pass
+
+
+async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE, urls: list, rate_status: dict):
+    """Handle batch download of multiple URLs"""
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+
+    # Get user's preferred quality
+    preferred_quality = user_prefs.get_preference(user_id, 'quality', 'hd')
+
+    await update.message.reply_text(
+        f"📦 **Batch Download Started**\n\n"
+        f"Processing {len(urls)} videos in {preferred_quality.upper()} quality...\n"
+        f"(Downloads remaining: {rate_status['remaining']})\n\n"
+        f"💡 Tip: Set your default quality with /settings",
+        parse_mode='Markdown'
+    )
+
+    success_count = 0
+    fail_count = 0
+
+    for i, url in enumerate(urls, 1):
+        # Check rate limit for each download
+        if not check_rate_limit(user_id):
+            await update.message.reply_text(
+                f"⚠️ Rate limit reached after {success_count} downloads. "
+                f"Remaining {len(urls) - i + 1} videos skipped."
+            )
+            break
+
+        progress_msg = await update.message.reply_text(
+            f"📥 Downloading video {i}/{len(urls)}..."
+        )
+
+        try:
+            async def progress_callback(progress_info):
+                try:
+                    status = progress_info.get('status')
+                    if status == 'downloading':
+                        percent = progress_info.get('_percent_str', 'N/A')
+                        await progress_msg.edit_text(
+                            f"📥 Video {i}/{len(urls)}: {percent}"
+                        )
+                    elif status == 'retrying':
+                        attempt = progress_info.get('attempt', 0)
+                        max_retries = progress_info.get('max_retries', 3)
+                        await progress_msg.edit_text(
+                            f"🔄 Video {i}/{len(urls)}: Retry {attempt}/{max_retries}..."
+                        )
+                except:
+                    pass
+
+            result = await video_downloader.download_video(
+                url, preferred_quality, progress_callback=progress_callback
+            )
+
+            if result['success']:
+                file_path = result['file_path']
+                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+                # Compress if needed
+                if file_size_mb > 49.0:
+                    await progress_msg.edit_text(f"🗜️ Video {i}/{len(urls)}: Compressing...")
+                    compress_result = await video_downloader.compress_video(file_path, target_size_mb=45.0)
+                    if compress_result['success']:
+                        file_path = compress_result['file_path']
+
+                # Send video
+                await progress_msg.edit_text(f"📤 Video {i}/{len(urls)}: Sending...")
+                with open(file_path, 'rb') as video_file:
+                    await context.bot.send_video(
+                        chat_id=update.effective_chat.id,
+                        video=video_file,
+                        caption=f"🎥 Video {i}/{len(urls)} - {preferred_quality.upper()}",
+                        supports_streaming=True,
+                        read_timeout=120,
+                        write_timeout=120
+                    )
+
+                # Record stats
+                user_stats_db.record_download(
+                    user_id=user_id,
+                    quality=preferred_quality,
+                    file_size_bytes=os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+                    url=url,
+                    success=True,
+                    username=username
+                )
+
+                # Cleanup
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                await progress_msg.delete()
+                success_count += 1
+
+            else:
+                await progress_msg.edit_text(f"❌ Video {i}/{len(urls)}: Failed - {result.get('error', 'Unknown error')}")
+                fail_count += 1
+
+        except Exception as e:
+            logger.error(f"Batch download error for URL {i}: {e}")
+            await progress_msg.edit_text(f"❌ Video {i}/{len(urls)}: Error - {str(e)[:50]}")
+            fail_count += 1
+
+    # Summary message
+    summary = f"📦 **Batch Download Complete**\n\n"
+    summary += f"✅ Successful: {success_count}\n"
+    if fail_count > 0:
+        summary += f"❌ Failed: {fail_count}\n"
+
+    await update.message.reply_text(summary, parse_mode='Markdown')
+
 
 def setup_application() -> Application:
     """Configure and return Telegram application"""
@@ -1215,8 +1385,6 @@ async def webhook_info():
         }
     except Exception as e:
         logger.error(f"Error getting webhook info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/webhook")

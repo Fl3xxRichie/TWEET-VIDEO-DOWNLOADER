@@ -73,8 +73,8 @@ class VideoDownloader:
             logger.error(f"Error getting video info: {e}")
             return None
 
-    async def download_video(self, url: str, quality: str, progress_callback: Optional[Callable] = None) -> Dict:
-        """Download video with specified quality"""
+    async def download_video(self, url: str, quality: str, progress_callback: Optional[Callable] = None, max_retries: int = 3) -> Dict:
+        """Download video with specified quality and automatic retry"""
         main_loop = asyncio.get_running_loop()
         timestamp = int(time.time())
         filename = f"video_{timestamp}"
@@ -82,91 +82,107 @@ class VideoDownloader:
 
         logger.info(f"Starting download for URL: {url} with quality: {quality}")
 
-        try:
-            # Quality format selection
-            format_selector = self._get_format_selector(quality)
-
-            # Progress hook
-            def progress_hook(d):
-                if progress_callback:
-                    try:
-                        # Schedule the async callback to run on the main event loop
-                        asyncio.run_coroutine_threadsafe(progress_callback(d), main_loop)
-                    except Exception as e:
-                        logger.error(f"Progress callback error: {e}")
-
-            # yt-dlp options
-            ydl_opts = {
-                'format': format_selector,
-                'outtmpl': f'{output_path}.%(ext)s',
-                'progress_hooks': [progress_hook],
-                'no_warnings': True,
-                'extractaudio': quality == 'audio',
-                'audioformat': 'mp3' if quality == 'audio' else None,
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
-            }
-            logger.debug(f"yt-dlp options: {ydl_opts}")
-
-            # Check file size limit before download
-            if Config.MAX_FILE_SIZE_MB:
-                ydl_opts['max_filesize'] = Config.MAX_FILE_SIZE_MB * 1024 * 1024
-
-            def download():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-
-            # Run download with a 5-minute timeout
-            await asyncio.wait_for(
-                main_loop.run_in_executor(None, download),
-                timeout=300.0
-            )
-
-            # Find the downloaded file
-            downloaded_file = None
-            for file in os.listdir(self.download_path):
-                if file.startswith(f"video_{timestamp}"):
-                    downloaded_file = os.path.join(self.download_path, file)
-                    break
-
-            if downloaded_file and os.path.exists(downloaded_file):
-                file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # MB
-                logger.info(f"Successfully downloaded: {downloaded_file} ({file_size:.2f}MB)")
-
-                return {
-                    'success': True,
-                    'file_path': downloaded_file,
-                    'file_size': f"{file_size:.2f}MB"
-                }
-            else:
-                logger.error(f"Download completed but file not found for timestamp: {timestamp}")
-                return {
-                    'success': False,
-                    'error': 'Download completed but file not found'
-                }
-
-        except asyncio.TimeoutError:
-            logger.error(f"Download timed out for URL: {url}")
-            return {'success': False, 'error': 'Download timed out after 5 minutes'}
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Download error for {url}: {error_msg}", exc_info=True)
-
-            # Clean up any partial files
+        last_error = None
+        for attempt in range(1, max_retries + 1):
             try:
+                if attempt > 1:
+                    logger.info(f"Retry attempt {attempt}/{max_retries} for {url}")
+                    if progress_callback:
+                        await progress_callback({'status': 'retrying', 'attempt': attempt, 'max_retries': max_retries})
+
+                # Quality format selection
+                format_selector = self._get_format_selector(quality)
+
+                # Progress hook
+                def progress_hook(d):
+                    if progress_callback:
+                        try:
+                            # Schedule the async callback to run on the main event loop
+                            asyncio.run_coroutine_threadsafe(progress_callback(d), main_loop)
+                        except Exception as e:
+                            logger.error(f"Progress callback error: {e}")
+
+                # yt-dlp options
+                ydl_opts = {
+                    'format': format_selector,
+                    'outtmpl': f'{output_path}.%(ext)s',
+                    'progress_hooks': [progress_hook],
+                    'no_warnings': True,
+                    'extractaudio': quality == 'audio',
+                    'audioformat': 'mp3' if quality == 'audio' else None,
+                    'postprocessors': [{
+                        'key': 'FFmpegVideoConvertor',
+                        'preferedformat': 'mp4',
+                    }],
+                }
+                logger.debug(f"yt-dlp options: {ydl_opts}")
+
+                # Check file size limit before download
+                if Config.MAX_FILE_SIZE_MB:
+                    ydl_opts['max_filesize'] = Config.MAX_FILE_SIZE_MB * 1024 * 1024
+
+                def download():
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+
+                # Run download with a 5-minute timeout
+                await asyncio.wait_for(
+                    main_loop.run_in_executor(None, download),
+                    timeout=300.0
+                )
+
+                # Find the downloaded file
+                downloaded_file = None
                 for file in os.listdir(self.download_path):
                     if file.startswith(f"video_{timestamp}"):
-                        os.remove(os.path.join(self.download_path, file))
-            except Exception as cleanup_error:
-                logger.error(f"Error during cleanup for {timestamp}: {cleanup_error}")
+                        downloaded_file = os.path.join(self.download_path, file)
+                        break
 
-            return {
-                'success': False,
-                'error': "An unexpected error occurred during download."
-            }
+                if downloaded_file and os.path.exists(downloaded_file):
+                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # MB
+                    logger.info(f"Successfully downloaded: {downloaded_file} ({file_size:.2f}MB)")
+
+                    return {
+                        'success': True,
+                        'file_path': downloaded_file,
+                        'file_size': f"{file_size:.2f}MB"
+                    }
+                else:
+                    logger.error(f"Download completed but file not found for timestamp: {timestamp}")
+                    last_error = 'Download completed but file not found'
+                    continue  # Retry
+
+            except asyncio.TimeoutError:
+                logger.error(f"Download timed out for URL: {url} (attempt {attempt})")
+                last_error = 'Download timed out after 5 minutes'
+                # Clean up partial files before retry
+                self._cleanup_partial_files(timestamp)
+                continue  # Retry
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Download error for {url} (attempt {attempt}): {error_msg}", exc_info=True)
+                last_error = error_msg
+                # Clean up partial files before retry
+                self._cleanup_partial_files(timestamp)
+                continue  # Retry
+
+        # All retries exhausted
+        logger.error(f"All {max_retries} download attempts failed for {url}")
+        return {
+            'success': False,
+            'error': f"Download failed after {max_retries} attempts: {last_error}"
+        }
+
+    def _cleanup_partial_files(self, timestamp: int):
+        """Clean up partial download files"""
+        try:
+            for file in os.listdir(self.download_path):
+                if file.startswith(f"video_{timestamp}"):
+                    os.remove(os.path.join(self.download_path, file))
+        except Exception as cleanup_error:
+            logger.error(f"Error during cleanup for {timestamp}: {cleanup_error}")
+
 
     def _get_format_selector(self, quality: str) -> str:
         """Get yt-dlp format selector based on quality choice"""
@@ -174,6 +190,7 @@ class VideoDownloader:
             'hd': 'best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best',
             '720p': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',
             '480p': 'best[height<=480][ext=mp4]/best[height<=480]/best[ext=mp4]/best',
+            '360p': 'best[height<=360][ext=mp4]/best[height<=360]/best[ext=mp4]/best',
             'audio': 'bestaudio[ext=m4a]/bestaudio/best'
         }
 

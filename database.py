@@ -118,7 +118,7 @@ class UserStatsDB:
             self._memory_fallback[user_id] = stats
             return False
 
-    def _init_user(self, user_id: int) -> Dict[str, Any]:
+    def _init_user(self, user_id: int, username: str = None) -> Dict[str, Any]:
         """Initialize statistics for a new user or return existing"""
         stats = self._get_user_stats_from_redis(user_id)
         if stats is None:
@@ -128,14 +128,20 @@ class UserStatsDB:
                     'hd': 0,
                     '720p': 0,
                     '480p': 0,
+                    '360p': 0,
                     'audio': 0
                 },
                 'first_used': datetime.now().isoformat(),
                 'last_used': datetime.now().isoformat(),
                 'total_size_mb': 0.0,
                 'download_history': [],
-                'daily_stats': {}
+                'daily_stats': {},
+                'username': username
             }
+            self._save_user_stats_to_redis(user_id, stats)
+        elif username and stats.get('username') != username:
+            # Update username if it changed
+            stats['username'] = username
             self._save_user_stats_to_redis(user_id, stats)
         return stats
 
@@ -149,10 +155,11 @@ class UserStatsDB:
         quality: str,
         file_size_bytes: int = 0,
         url: str = "",
-        success: bool = True
+        success: bool = True,
+        username: str = None
     ) -> None:
         """Record a download event for a user"""
-        stats = self._init_user(user_id)
+        stats = self._init_user(user_id, username)
 
         if success:
             # Update counters
@@ -358,6 +365,7 @@ class UserStatsDB:
         return [
             {
                 'user_id': user_id,
+                'username': stats.get('username'),
                 'downloads': stats['total_downloads'],
                 'total_size_mb': round(stats['total_size_mb'], 2)
             }
@@ -367,3 +375,4 @@ class UserStatsDB:
 
 # Initialize global stats database
 user_stats_db = UserStatsDB()
+

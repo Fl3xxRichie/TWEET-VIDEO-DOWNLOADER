@@ -29,23 +29,24 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 ### Core Functionality
 - **🎥 High-Quality Downloads**: Support for multiple video qualities:
   - **HD (1080p)**: Crystal clear video quality
-  - **SD (720p/480p)**: Balanced quality and file size
+  - **SD (720p/480p/360p)**: Balanced quality and file size
   - **Audio-only (MP3)**: Extract audio tracks
+- **📦 Batch Downloads**: Send multiple URLs in one message - download them all!
 - **⚡ Lightning Fast**: Optimized download speeds with parallel processing
 - **📱 User-Friendly Interface**: Intuitive commands and interactive buttons
 - **📊 Real-Time Progress**: Live download progress with speed and ETA indicators
 
 ### Advanced Features
-- **🛡️ Rate Limiting**: Configurable per-user download limits to prevent abuse
+- **🛡️ Rate Limiting**: Configurable per-user download limits with remaining count display
 - **📏 File Size Control**: Automatic file size validation and compression
 - **🗜️ Auto-Compression**: Automatically compresses videos over 45MB to fit Telegram limits
 - **🖼️ Thumbnail Preview**: See video thumbnail, title, and duration before downloading
 - **📜 Download History**: View your last 10 downloads with `/history`
-- **📊 Download Queue**: Redis-based queue system for handling high traffic
-- **🔄 Auto-Retry**: Intelligent retry mechanism for failed downloads
+- **🔄 Auto-Retry**: Automatic retry (3 attempts) for failed downloads
+- **👤 Username Privacy**: Dashboard shows usernames or masked IDs for privacy
+- **⭐ Quality Favorites**: Star icon shows your preferred download quality
 - **📝 Comprehensive Logging**: Detailed logs for monitoring and debugging
-- **🔒 Redis Integration**: Utilizes Redis for rate limiting, user statistics, and preferences (required for persistent storage)
-- **🌐 Multi-Format Support**: Various Twitter/X URL formats supported
+- **🔒 Redis Integration**: Utilizes Redis for rate limiting, user statistics, and preferences
 
 ### Deployment & Scaling
 - **📉 Analytics Dashboard**: Web-based dashboard for visualizing bot usage, top users, and traffic trends
@@ -58,16 +59,37 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 
 ## 🎯 Demo
 
-### Basic Usage
+### Single Video Download
 ```
 User: https://twitter.com/username/status/1234567890
 Bot: 🎬 Video detected! Choose your preferred quality:
-     [🎥 HD (1080p)] [📺 SD (720p)] [🎵 Audio Only]
+     [⭐ HD (1080p) ⭐] [SD (720p)] [SD (480p)]
+     [SD (360p)] [Audio Only] [❌ Cancel]
 
 User: [Clicks HD]
 Bot: ⬇️ Downloading... 45% (2.3 MB/s, ETA: 8s)
      ✅ Download complete! Here's your video.
 ```
+
+### Batch Download (NEW!)
+```
+User: Download these:
+      https://twitter.com/user1/status/111
+      https://twitter.com/user2/status/222
+      https://twitter.com/user3/status/333
+
+Bot: 📦 Batch Download Started
+     Processing 3 videos in HD quality...
+     (Downloads remaining: 7)
+
+Bot: 📥 Video 1/3: 100%
+Bot: 📥 Video 2/3: 45%...
+Bot: 📥 Video 3/3: Sending...
+
+Bot: 📦 Batch Download Complete
+     ✅ Successful: 3
+```
+
 
 ## 📋 Prerequisites
 
@@ -613,6 +635,22 @@ We welcome contributions! Here's how you can help:
 - 🔧 **Features**: New download options and formats
 - 🐛 **Bug Fixes**: Report and fix issues
 - 📚 **Documentation**: Improve guides and examples
+
+## 🗺️ Future Roadmap
+
+Features planned for upcoming releases:
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| 🌍 **Multi-Platform Support** | 🔜 Planned | Support for Instagram Reels, TikTok, YouTube Shorts |
+| ☁️ **Cloud Storage** | 🔜 Planned | Direct upload to Google Drive, Dropbox, OneDrive |
+| ✂️ **Video Trimming** | 💡 Considering | Specify start/end time to download partial video |
+| 🎨 **Format Conversion** | 💡 Considering | Convert to MP4, WebM, GIF output formats |
+| 🔔 **Account Subscriptions** | 💡 Considering | Get notified when accounts post new videos |
+| 🌐 **Inline Mode** | 💡 Considering | Use bot inline: `@botname twitter-url` |
+| 🌏 **i18n Support** | 💡 Considering | Multi-language interface (ES, FR, AR, etc.) |
+
+> 💡 Have a feature request? [Open an issue](https://github.com/Fl3xxRichie/tweet-video-downloader/issues)!
 
 ## 📄 License
 

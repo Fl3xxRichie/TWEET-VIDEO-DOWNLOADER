@@ -400,10 +400,14 @@
           const rankBadge = index < 3
             ? ['🥇', '🥈', '🥉'][index]
             : `<span class="text-gray-500">#${index + 1}</span>`;
+          // Show username if available, otherwise mask user ID
+          const displayName = user.username
+            ? `@${user.username}`
+            : `User ***${String(user.user_id).slice(-4)}`;
           return `
                         <tr class="table-row">
                             <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-white">${rankBadge}</td>
-                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-400 font-mono">${user.user_id}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-400 font-mono">${displayName}</td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-white font-medium">${user.downloads}</td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-400">${user.total_size_mb.toFixed(1)} MB</td>
                         </tr>
@@ -443,6 +447,3 @@
 </body>
 
 </html>
-</CodeContent>
-<parameter name="Description">Complete dashboard redesign with dark theme, no gradients, modern card-based UI with
-  subtle animations
