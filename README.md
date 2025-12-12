@@ -1,11 +1,11 @@
-# 🎬 Twitter/X Video Downloader Telegram Bot
+# 🎬 Multi-Platform Video Downloader Telegram Bot
 
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg)](https://www.docker.com/)
 [![Telegram](https://img.shields.io/badge/telegram-bot-blue.svg)](https://telegram.org/)
 
-A powerful, scalable, and user-friendly Telegram bot for downloading high-quality videos from Twitter/X (formerly Twitter). Built with Python using modern frameworks like `python-telegram-bot`, `yt-dlp`, and `FastAPI` for optimal performance and reliability.
+A powerful, scalable, and user-friendly Telegram bot for downloading high-quality videos from **Twitter/X, Instagram Reels, TikTok, and YouTube Shorts**. Built with Python using modern frameworks like `python-telegram-bot`, `yt-dlp`, and `FastAPI` for optimal performance and reliability.
 
 ## 📋 Table of Contents
 

@@ -131,6 +131,12 @@ class UserStatsDB:
                     '360p': 0,
                     'audio': 0
                 },
+                'downloads_by_platform': {
+                    'twitter': 0,
+                    'instagram': 0,
+                    'tiktok': 0,
+                    'youtube': 0
+                },
                 'first_used': datetime.now().isoformat(),
                 'last_used': datetime.now().isoformat(),
                 'total_size_mb': 0.0,
@@ -156,7 +162,8 @@ class UserStatsDB:
         file_size_bytes: int = 0,
         url: str = "",
         success: bool = True,
-        username: str = None
+        username: str = None,
+        platform: str = None
     ) -> None:
         """Record a download event for a user"""
         stats = self._init_user(user_id, username)
@@ -170,6 +177,15 @@ class UserStatsDB:
                 stats['downloads_by_quality'][quality] += 1
             else:
                 stats['downloads_by_quality'][quality] = 1
+
+            # Update platform-specific counter
+            if platform:
+                if 'downloads_by_platform' not in stats:
+                    stats['downloads_by_platform'] = {'twitter': 0, 'instagram': 0, 'tiktok': 0, 'youtube': 0}
+                if platform in stats['downloads_by_platform']:
+                    stats['downloads_by_platform'][platform] += 1
+                else:
+                    stats['downloads_by_platform'][platform] = 1
 
             # Update total size
             size_mb = file_size_bytes / (1024 * 1024)
@@ -303,19 +319,33 @@ class UserStatsDB:
             'hd': 0,
             '720p': 0,
             '480p': 0,
+            '360p': 0,
             'audio': 0
         }
 
+        # Aggregate downloads by platform
+        platform_totals = {
+            'twitter': 0,
+            'instagram': 0,
+            'tiktok': 0,
+            'youtube': 0
+        }
+
         for user in all_stats.values():
-            for quality, count in user['downloads_by_quality'].items():
+            for quality, count in user.get('downloads_by_quality', {}).items():
                 if quality in quality_totals:
                     quality_totals[quality] += count
+
+            for platform, count in user.get('downloads_by_platform', {}).items():
+                if platform in platform_totals:
+                    platform_totals[platform] += count
 
         return {
             'total_users': len(all_stats),
             'total_downloads': total_downloads,
             'total_size_mb': round(total_size_mb, 2),
-            'downloads_by_quality': quality_totals
+            'downloads_by_quality': quality_totals,
+            'downloads_by_platform': platform_totals
         }
 
     def delete_user_data(self, user_id: int) -> bool:

@@ -39,10 +39,13 @@ class VideoDownloader:
             formats = info.get('formats', [])
 
             for fmt in formats:
-                height = fmt.get('height', 0)
-                filesize = fmt.get('filesize') or fmt.get('filesize_approx', 0)
+                # Handle None values for height - some platforms don't provide this
+                height = fmt.get('height')
+                if height is None:
+                    height = 0
+                filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
 
-                if filesize:
+                if filesize and filesize > 0:
                     size_mb = filesize / (1024 * 1024)
                     size_str = f"{size_mb:.1f}MB"
 
@@ -52,11 +55,16 @@ class VideoDownloader:
                         size_estimates['720p'] = size_str
                     elif height >= 480:
                         size_estimates['480p'] = size_str
+                    elif height >= 360:
+                        size_estimates['360p'] = size_str
 
             # Audio estimate (usually much smaller)
             if formats:
-                audio_size = min([f.get('filesize', 0) or 0 for f in formats if f.get('acodec') != 'none'])
-                if audio_size:
+                audio_sizes = [f.get('filesize') or f.get('filesize_approx') or 0
+                               for f in formats if f.get('acodec') != 'none']
+                audio_sizes = [s for s in audio_sizes if s > 0]  # Filter out zeros
+                if audio_sizes:
+                    audio_size = min(audio_sizes)
                     size_estimates['audio'] = f"{audio_size / (1024 * 1024):.1f}MB"
                 else:
                     size_estimates['audio'] = "~5MB"
@@ -90,8 +98,8 @@ class VideoDownloader:
                     if progress_callback:
                         await progress_callback({'status': 'retrying', 'attempt': attempt, 'max_retries': max_retries})
 
-                # Quality format selection
-                format_selector = self._get_format_selector(quality)
+                # Quality format selection - platform-aware
+                format_selector = self._get_format_selector(quality, url)
 
                 # Progress hook
                 def progress_hook(d):
@@ -102,19 +110,21 @@ class VideoDownloader:
                         except Exception as e:
                             logger.error(f"Progress callback error: {e}")
 
-                # yt-dlp options
+                # yt-dlp options - avoid ffmpeg-dependent options
                 ydl_opts = {
-                    'format': format_selector,
                     'outtmpl': f'{output_path}.%(ext)s',
                     'progress_hooks': [progress_hook],
                     'no_warnings': True,
                     'extractaudio': quality == 'audio',
                     'audioformat': 'mp3' if quality == 'audio' else None,
-                    'postprocessors': [{
-                        'key': 'FFmpegVideoConvertor',
-                        'preferedformat': 'mp4',
-                    }],
+                    # Skip post-processing that requires ffmpeg
+                    'postprocessors': [],
                 }
+
+                # Only set format if format_selector is not None (YouTube uses auto-select)
+                if format_selector:
+                    ydl_opts['format'] = format_selector
+
                 logger.debug(f"yt-dlp options: {ydl_opts}")
 
                 # Check file size limit before download
@@ -184,17 +194,29 @@ class VideoDownloader:
             logger.error(f"Error during cleanup for {timestamp}: {cleanup_error}")
 
 
-    def _get_format_selector(self, quality: str) -> str:
-        """Get yt-dlp format selector based on quality choice"""
-        format_selectors = {
-            'hd': 'best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best',
-            '720p': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',
-            '480p': 'best[height<=480][ext=mp4]/best[height<=480]/best[ext=mp4]/best',
-            '360p': 'best[height<=360][ext=mp4]/best[height<=360]/best[ext=mp4]/best',
-            'audio': 'bestaudio[ext=m4a]/bestaudio/best'
-        }
+    def _get_format_selector(self, quality: str, url: str = "") -> str:
+        """Get yt-dlp format selector based on quality choice and platform.
+        Uses pre-merged formats to avoid requiring ffmpeg for stream merging.
+        Platform-aware to handle YouTube Shorts' limited format options.
+        """
+        # Check if this is a YouTube URL (including Shorts)
+        is_youtube = 'youtube.com' in url or 'youtu.be' in url
 
-        return format_selectors.get(quality, format_selectors['720p'])
+        if is_youtube:
+            # YouTube Shorts work best with no format specified - let yt-dlp auto-select
+            # This avoids "format not available" errors
+            # Return None to indicate no format should be specified
+            return None
+        else:
+            # For TikTok, Instagram, Twitter - use height-based selection
+            format_selectors = {
+                'hd': 'best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best',
+                '720p': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',
+                '480p': 'best[height<=480][ext=mp4]/best[height<=480]/best[ext=mp4]/best',
+                '360p': 'best[height<=360][ext=mp4]/best[height<=360]/best[ext=mp4]/best',
+                'audio': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best'
+            }
+            return format_selectors.get(quality, format_selectors.get('720p', 'best'))
 
     def cleanup_old_files(self, max_age_minutes: int = 10):
         """Clean up old downloaded files"""

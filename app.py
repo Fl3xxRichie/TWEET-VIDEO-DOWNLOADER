@@ -122,7 +122,7 @@ async def cleanup_scheduler():
 # NOTE: Queue processor removed to reduce Redis API calls
 # Downloads now process directly in handle_quality_selection
 
-async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None, username: str = None):
+async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None, username: str = None, platform: str = None):
     """Execute the actual download for a user request"""
 
     try:
@@ -238,7 +238,8 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
                         file_size_bytes=stats_file_size,
                         url=url,
                         success=True,
-                        username=username
+                        username=username,
+                        platform=platform
                     )
                 except Exception as e:
                     logger.error(f"Stats error: {e}")
@@ -408,7 +409,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from utils import validate_twitter_url, check_rate_limit, get_rate_limit_status, user_prefs, redis_cache, format_file_size, format_timestamp, get_quality_emoji
+from utils import (
+    validate_twitter_url, validate_video_url, detect_platform, PLATFORM_PATTERNS,
+    check_rate_limit, get_rate_limit_status, user_prefs, redis_cache,
+    format_file_size, format_timestamp, get_quality_emoji
+)
 from video_downloader import VideoDownloader
 from database import user_stats_db
 
@@ -565,15 +570,15 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 "Send multiple URLs in one message!\n"
                 "• All videos download in your default quality\n"
                 "• Set quality first with /settings\n\n"
-                "**Supported qualities:**\n"
-                "• HD (1080p) • 720p • 480p • 360p\n"
-                "• Audio only (MP3)\n\n"
+                "**Supported platforms:**\n"
+                "• Twitter/X • Instagram Reels\n"
+                "• TikTok • YouTube Shorts\n\n"
+                "**Qualities:** HD • 720p • 480p • 360p • Audio\n\n"
                 "**Commands:**\n"
                 "/start - Main menu\n"
                 "/stats - View your statistics\n"
                 "/settings - Change preferences\n"
-                "/history - Download history\n"
-                "/help - Show this help\n\n"
+                "/history - Download history\n\n"
                 "**Tips:**\n"
                 "• ⭐ starred quality = your default\n"
                 "• Auto-retry on failed downloads\n"
@@ -664,7 +669,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 url=url,
                 quality=quality,
                 message_id=query.message.message_id,
-                username=query.from_user.username
+                username=query.from_user.username,
+                platform=detect_platform(url)
             ))
 
             # Clean up URL from cache
@@ -699,14 +705,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         welcome_text = (
-            "👋 Welcome to Twitter/X Video Downloader!\n\n"
-            "I can help you download videos from Twitter/X in various qualities.\n\n"
-            "Choose an option below to get started:"
+            "👋 **Welcome to Video Downloader Bot!**\n\n"
+            "📥 Download videos from:\n"
+            "• Twitter/X\n"
+            "• Instagram Reels\n"
+            "• TikTok\n"
+            "• YouTube Shorts\n\n"
+            "Just send me a video URL to get started!"
         )
 
         await update.message.reply_text(
             welcome_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
         )
     except Exception as e:
         logger.error(f"Error in start command: {e}", exc_info=True)
@@ -723,11 +734,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "**📦 Batch Download:**\n"
             "Send multiple URLs in one message!\n"
             "Videos download in your default quality.\n\n"
+            "**Supported platforms:**\n"
+            "Twitter/X • Instagram • TikTok • YouTube Shorts\n\n"
             "**Qualities:** HD • 720p • 480p • 360p • Audio\n\n"
-            "**Commands:**\n"
-            "/settings - Set default quality\n"
-            "/stats - Your download stats\n"
-            "/history - Recent downloads",
+            "/settings - Set quality | /stats - Stats | /history - History",
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -1023,20 +1033,140 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Error retrieving admin statistics.")
 
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message to all bot users (Admin only)
+
+    Usage:
+    - Text only: /broadcast Your message here
+    - With image: Reply to an image with /broadcast Optional caption
+    """
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"Broadcast command from user {user_id}")
+
+        # Check if user is admin
+        if not Config.ADMIN_USER_ID or user_id != Config.ADMIN_USER_ID:
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+
+        # Check if this is a reply to a photo (image broadcast)
+        reply_message = update.message.reply_to_message
+        photo_file_id = None
+
+        if reply_message and reply_message.photo:
+            # Get the highest resolution photo
+            photo_file_id = reply_message.photo[-1].file_id
+
+        # Get message/caption to broadcast
+        broadcast_message = ' '.join(context.args) if context.args else None
+
+        # Validate input
+        if not photo_file_id and not broadcast_message:
+            await update.message.reply_text(
+                "📢 **Broadcast Usage**\n\n"
+                "**Text only:**\n"
+                "`/broadcast Your message here`\n\n"
+                "**With image:**\n"
+                "Reply to an image with `/broadcast` (optional caption)\n\n"
+                "**Examples:**\n"
+                "`/broadcast 🎉 New feature available!`\n"
+                "_Reply to photo_ + `/broadcast Check this out!`",
+                parse_mode='Markdown'
+            )
+            return
+
+        # Get all user IDs from database
+        all_user_ids = user_stats_db._get_all_user_ids()
+
+        if not all_user_ids:
+            await update.message.reply_text("❌ No users found in database.")
+            return
+
+        # Determine broadcast type
+        broadcast_type = "image" if photo_file_id else "text"
+
+        # Send progress message
+        progress_msg = await update.message.reply_text(
+            f"📢 Broadcasting {broadcast_type} to {len(all_user_ids)} users...\n"
+            f"This may take a moment."
+        )
+
+        success_count = 0
+        fail_count = 0
+
+        for uid in all_user_ids:
+            try:
+                if photo_file_id:
+                    # Send image with optional caption
+                    caption = f"📢 **Announcement**\n\n{broadcast_message}" if broadcast_message else "📢 **Announcement**"
+                    await context.bot.send_photo(
+                        chat_id=uid,
+                        photo=photo_file_id,
+                        caption=caption,
+                        parse_mode='Markdown'
+                    )
+                else:
+                    # Send text message
+                    await context.bot.send_message(
+                        chat_id=uid,
+                        text=f"📢 **Announcement**\n\n{broadcast_message}",
+                        parse_mode='Markdown'
+                    )
+                success_count += 1
+
+                # Small delay to avoid hitting rate limits
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                logger.warning(f"Failed to send broadcast to user {uid}: {e}")
+                fail_count += 1
+
+        # Update progress message with results
+        await progress_msg.edit_text(
+            f"📢 **Broadcast Complete**\n\n"
+            f"📝 Type: {broadcast_type.capitalize()}\n"
+            f"✅ Sent: {success_count}\n"
+            f"❌ Failed: {fail_count}\n"
+            f"📊 Total: {len(all_user_ids)} users"
+        )
+
+        logger.info(f"Broadcast ({broadcast_type}) completed: {success_count} sent, {fail_count} failed")
+
+    except Exception as e:
+        logger.error(f"Error in broadcast command: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error sending broadcast.")
+
+
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming Twitter URLs (supports batch - multiple URLs in one message)"""
+    """Handle incoming video URLs (supports batch - multiple URLs, multiple platforms)"""
     import re
     try:
         user_id = update.message.from_user.id
         message_text = update.message.text.strip()
         logger.info(f"Message received from user {user_id}: {message_text[:100]}...")
 
-        # Extract all Twitter URLs from the message (batch support)
-        url_pattern = r'https?://(?:www\.)?(?:twitter|x)\.com/\S+/status/\d+'
-        urls = list(set(re.findall(url_pattern, message_text)))  # Remove duplicates
+        # Extract all video URLs from supported platforms
+        all_patterns = []
+        for platform, patterns in PLATFORM_PATTERNS.items():
+            all_patterns.extend(patterns)
+
+        # Find all matching URLs
+        urls = []
+        for pattern in all_patterns:
+            matches = re.findall(pattern, message_text)
+            urls.extend(matches)
+        urls = list(set(urls))  # Remove duplicates
 
         if not urls:
-            await update.message.reply_text("⚠️ Please send a valid Twitter/X URL")
+            await update.message.reply_text(
+                "⚠️ Please send a valid video URL\n\n"
+                "**Supported platforms:**\n"
+                "• Twitter/X\n"
+                "• Instagram Reels\n"
+                "• TikTok\n"
+                "• YouTube Shorts",
+                parse_mode='Markdown'
+            )
             return
 
         # Check rate limit status
@@ -1260,7 +1390,8 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                     file_size_bytes=os.path.getsize(file_path) if os.path.exists(file_path) else 0,
                     url=url,
                     success=True,
-                    username=username
+                    username=username,
+                    platform=detect_platform(url)
                 )
 
                 # Cleanup
@@ -1318,6 +1449,7 @@ def setup_application() -> Application:
     application.add_handler(CommandHandler("settings", settings_command))
     application.add_handler(CommandHandler("about", about_command))
     application.add_handler(CommandHandler("adminstats", admin_stats_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("history", history_command))
 
     # Message handler for URLs

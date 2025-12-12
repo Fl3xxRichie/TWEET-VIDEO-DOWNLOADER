@@ -181,14 +181,50 @@ def cleanup_all_temp_files() -> None:
         if filepath in _temp_files:
             del _temp_files[filepath]
 
-def validate_twitter_url(url: str) -> bool:
-    """Validate if URL is a valid Twitter/X URL"""
-    patterns = [
-        r'https?://(?:www\.)?(?:twitter|x)\.com/.+/status/\d+',
-        r'https?://(?:www\.)?(?:twitter|x)\.com/\w+/status/\d+',
-        r'https?://(?:www\.)?(?:twitter|x)\.com/i/status/\d+'
+# Supported platform URL patterns
+# These patterns are designed to work with both re.match() and re.findall()
+PLATFORM_PATTERNS = {
+    'twitter': [
+        r'https?://(?:www\.)?(?:twitter|x)\.com/[^\s]+/status/\d+[^\s]*',
+        r'https?://(?:www\.)?(?:twitter|x)\.com/i/status/\d+[^\s]*'
+    ],
+    'instagram': [
+        r'https?://(?:www\.)?instagram\.com/(?:p|reel|reels)/[\w-]+[^\s]*',
+        r'https?://(?:www\.)?instagram\.com/[\w.]+/reel/[\w-]+[^\s]*'
+    ],
+    'tiktok': [
+        r'https?://(?:www\.)?tiktok\.com/@[\w.-]+/video/\d+[^\s]*',
+        r'https?://(?:vm\.)?tiktok\.com/[\w]+[^\s]*',
+        r'https?://(?:vt\.)?tiktok\.com/[\w]+[^\s]*',
+        r'https?://(?:www\.)?tiktok\.com/t/[\w]+[^\s]*'
+    ],
+    'youtube': [
+        r'https?://(?:www\.)?youtube\.com/shorts/[\w-]+[^\s]*',
+        r'https?://(?:www\.)?youtu\.be/[\w-]+[^\s]*',
+        r'https?://(?:www\.)?youtube\.com/watch\?v=[\w-]+[^\s]*'
     ]
-    return any(re.match(pattern, url) for pattern in patterns)
+}
+
+
+def detect_platform(url: str) -> Optional[str]:
+    """Detect which platform a URL belongs to"""
+    for platform, patterns in PLATFORM_PATTERNS.items():
+        for pattern in patterns:
+            if re.match(pattern, url):
+                return platform
+    return None
+
+
+def validate_video_url(url: str) -> bool:
+    """Validate if URL is a valid video URL from any supported platform"""
+    return detect_platform(url) is not None
+
+
+def validate_twitter_url(url: str) -> bool:
+    """Legacy function - validates Twitter/X URLs only"""
+    platform = detect_platform(url)
+    return platform == 'twitter'
+
 
 def parse_tweet_id(url: str) -> Optional[str]:
     """Extract tweet ID from Twitter/X URL"""

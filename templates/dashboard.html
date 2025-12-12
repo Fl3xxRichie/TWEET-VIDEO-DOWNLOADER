@@ -241,6 +241,46 @@
       </div>
     </div>
 
+    <!-- Platform Distribution Row -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
+      <!-- Platform Distribution Chart -->
+      <div class="card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-xl">🌐</span>
+          Platform Distribution
+        </h3>
+        <div class="flex justify-center h-64">
+          <canvas id="platformChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Platform Labels -->
+      <div class="card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-xl">📊</span>
+          Downloads by Platform
+        </h3>
+        <div class="space-y-4" id="platform-breakdown">
+          <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50">
+            <span class="flex items-center gap-2"><span>🐦</span> Twitter/X</span>
+            <span id="twitter-count" class="font-bold text-blue-400">0</span>
+          </div>
+          <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50">
+            <span class="flex items-center gap-2"><span>📸</span> Instagram</span>
+            <span id="instagram-count" class="font-bold text-pink-400">0</span>
+          </div>
+          <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50">
+            <span class="flex items-center gap-2"><span>🎵</span> TikTok</span>
+            <span id="tiktok-count" class="font-bold text-cyan-400">0</span>
+          </div>
+          <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50">
+            <span class="flex items-center gap-2"><span>▶️</span> YouTube Shorts</span>
+            <span id="youtube-count" class="font-bold text-red-400">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Top Users Table -->
     <div class="card rounded-xl p-6">
       <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -389,6 +429,47 @@
           }
         }
       });
+
+      // Update Platform Chart
+      const platformCtx = document.getElementById('platformChart').getContext('2d');
+      const platforms = global.downloads_by_platform || { twitter: 0, instagram: 0, tiktok: 0, youtube: 0 };
+
+      if (window.myPlatformChart) window.myPlatformChart.destroy();
+
+      window.myPlatformChart = new Chart(platformCtx, {
+        type: 'doughnut',
+        data: {
+          labels: ['Twitter/X', 'Instagram', 'TikTok', 'YouTube'],
+          datasets: [{
+            data: [platforms.twitter || 0, platforms.instagram || 0, platforms.tiktok || 0, platforms.youtube || 0],
+            backgroundColor: ['#1da1f2', '#e1306c', '#00f2ea', '#ff0000'],
+            borderColor: '#1a1a1a',
+            borderWidth: 3,
+            hoverOffset: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '65%',
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                padding: 20,
+                usePointStyle: true,
+                pointStyle: 'circle'
+              }
+            }
+          }
+        }
+      });
+
+      // Update platform counters
+      document.getElementById('twitter-count').textContent = platforms.twitter || 0;
+      document.getElementById('instagram-count').textContent = platforms.instagram || 0;
+      document.getElementById('tiktok-count').textContent = platforms.tiktok || 0;
+      document.getElementById('youtube-count').textContent = platforms.youtube || 0;
 
       // Update Table
       const tbody = document.getElementById('top-users-body');
