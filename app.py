@@ -5,7 +5,7 @@ import asyncio
 import logging
 import logging.handlers
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand, InlineQueryResultArticle, InputTextMessageContent
-from telegram.ext import ContextTypes, InlineQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes, InlineQueryHandler
 from datetime import datetime
 from config import Config
 import uvicorn
@@ -437,7 +437,7 @@ app.add_middleware(
 from utils import (
     validate_twitter_url, validate_video_url, detect_platform, PLATFORM_PATTERNS,
     check_rate_limit, get_rate_limit_status, user_prefs, redis_cache,
-    format_file_size, format_timestamp, get_quality_emoji
+    format_file_size, format_timestamp, get_quality_emoji, url_shortener
 )
 from video_downloader import VideoDownloader
 from database import user_stats_db
@@ -822,6 +822,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     try:
         logger.info(f"Start command from user {update.effective_user.id}")
+
+        # Check for deep link arguments (short codes)
+        if context.args and len(context.args) > 0:
+            short_code = context.args[0]
+            resolved_url = url_shortener.get_url(short_code)
+
+            if resolved_url:
+                logger.info(f"Resolved deep link: {short_code} -> {resolved_url}")
+                # Update message text to be the URL so handle_url processes it
+                update.message.text = resolved_url
+                # Delegate to handle_url
+                await handle_url(update, context)
+                return
+
 
         # Create main menu keyboard
         keyboard = [
@@ -1730,9 +1744,9 @@ def setup_application() -> Application:
                 id=short_code,
                 title=f"Download {platform.title()} Video",
                 description="Click to download this video in the bot",
-                thumb_url="https://img.icons8.com/color/48/download--v1.png",
+                thumbnail_url="https://img.icons8.com/color/48/download--v1.png",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"{platform_emoji} **Downloading Video**\n\nI am downloading this video via @{bot_username}!\n\n👇 Click below to get it too:",
+                    message_text=f"{platform_emoji} *Downloading Video*\n\nI am downloading this video via @{bot_username.replace('_', r'\_')}!\n\n👇 Click below to get it too:",
                     parse_mode='Markdown'
                 ),
                 reply_markup=InlineKeyboardMarkup([
