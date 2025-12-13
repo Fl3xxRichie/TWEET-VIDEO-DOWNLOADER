@@ -4,9 +4,8 @@ import time
 import asyncio
 import logging
 import logging.handlers
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand, InlineQueryResultArticle, InputTextMessageContent
+from telegram.ext import ContextTypes, InlineQueryHandler
 from datetime import datetime
 from config import Config
 import uvicorn
@@ -1698,6 +1697,53 @@ def setup_application() -> Application:
     application.add_handler(CommandHandler("adminstats", admin_stats_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("history", history_command))
+
+    # Inline Query Handler
+    async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline queries for sharing/downloading videos"""
+        query = update.inline_query.query.strip()
+
+        if not query:
+            return
+
+        # Check if query contains a valid URL
+        from utils import validate_video_url, detect_platform, url_shortener
+
+        if not validate_video_url(query):
+            return
+
+        platform = detect_platform(query)
+        platform_emoji = {
+            'twitter': '🐦',
+            'instagram': '📸',
+            'tiktok': '🎵',
+            'youtube': '▶️'
+        }.get(platform, '🎥')
+
+        # Shorten URL for deep linking
+        short_code = url_shortener.save_url(query)
+        bot_username = context.bot.username
+
+        # Create result article
+        results = [
+            InlineQueryResultArticle(
+                id=short_code,
+                title=f"Download {platform.title()} Video",
+                description="Click to download this video in the bot",
+                thumb_url="https://img.icons8.com/color/48/download--v1.png",
+                input_message_content=InputTextMessageContent(
+                    message_text=f"{platform_emoji} **Downloading Video**\n\nI am downloading this video via @{bot_username}!\n\n👇 Click below to get it too:",
+                    parse_mode='Markdown'
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📥 Download Video", url=f"https://t.me/{bot_username}?start={short_code}")]
+                ])
+            )
+        ]
+
+        await update.inline_query.answer(results, cache_time=0)
+
+    application.add_handler(InlineQueryHandler(inline_query_handler))
 
     # Message handler for URLs
     application.add_handler(MessageHandler(

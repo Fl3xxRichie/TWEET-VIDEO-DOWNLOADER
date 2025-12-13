@@ -11,14 +11,9 @@ from pathlib import Path
 import threading
 from collections import defaultdict
 
-logger = logging.getLogger(__name__)
-
-# Environment prefix to separate local and production data
-ENV = os.getenv('ENVIRONMENT', 'development')
+# ... (imports)
 
 class RedisCache:
-    """Handles caching data in Redis."""
-    def __init__(self):
         self._redis_client = None
         self._connect_redis()
 
