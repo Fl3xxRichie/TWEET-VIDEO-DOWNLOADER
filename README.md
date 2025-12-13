@@ -36,6 +36,12 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 - **📱 User-Friendly Interface**: Intuitive commands and interactive buttons
 - **📊 Real-Time Progress**: Live download progress with speed and ETA indicators
 
+### Platform Support
+- **🐦 Twitter/X**: HD & SD videos.
+- **📸 Instagram**: Reels & Posts.
+- **🎵 TikTok**: Watermark-free videos.
+- **▶️ YouTube**: Shorts & standard videos.
+
 ### Advanced Features
 - **🛡️ Rate Limiting**: Configurable per-user download limits with remaining count display
 - **📏 File Size Control**: Automatic file size validation and compression
@@ -47,6 +53,8 @@ A powerful, scalable, and user-friendly Telegram bot for downloading high-qualit
 - **⭐ Quality Favorites**: Star icon shows your preferred download quality
 - **📝 Comprehensive Logging**: Detailed logs for monitoring and debugging
 - **🔒 Redis Integration**: Utilizes Redis for rate limiting, user statistics, and preferences
+- **🌐 Inline Mode**: Use the bot in any chat via `@BotName <url>` to generate download links.
+- **📢 Broadcast System**: Admins can send announcements to all users.
 
 ### Deployment & Scaling
 - **📉 Analytics Dashboard**: Web-based dashboard for visualizing bot usage, top users, and traffic trends
@@ -89,6 +97,12 @@ Bot: 📥 Video 3/3: Sending...
 Bot: 📦 Batch Download Complete
      ✅ Successful: 3
 ```
+
+### Inline Mode (NEW!)
+Type `@YourBotName https://twitter.com/user/status/123` in **any chat**:
+1. A **"Download Video"** button appears.
+2. Click it to open the bot.
+3. Download starts automatically!
 
 
 ## 📋 Prerequisites
@@ -455,6 +469,7 @@ Once the secret is added, the workflow will start running on its schedule, keepi
 | `/settings` | Configure personal bot settings | `/settings` |
 | `/about` | Information about the bot and developer | `/about` |
 | `/adminstats` | Admin dashboard (admin only) | `/adminstats` |
+| `/broadcast` | Send message to all users (admin only) | `/broadcast <msg>` |
 
 ### Interactive Features
 
@@ -642,12 +657,12 @@ Features planned for upcoming releases:
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| 🌍 **Multi-Platform Support** | 🔜 Planned | Support for Instagram Reels, TikTok, YouTube Shorts |
+| 🌍 **Multi-Platform Support** | ✅ Completed | Support for Instagram Reels, TikTok, YouTube Shorts |
 | ☁️ **Cloud Storage** | 🔜 Planned | Direct upload to Google Drive, Dropbox, OneDrive |
 | ✂️ **Video Trimming** | 💡 Considering | Specify start/end time to download partial video |
 | 🎨 **Format Conversion** | 💡 Considering | Convert to MP4, WebM, GIF output formats |
 | 🔔 **Account Subscriptions** | 💡 Considering | Get notified when accounts post new videos |
-| 🌐 **Inline Mode** | 💡 Considering | Use bot inline: `@botname twitter-url` |
+| 🌐 **Inline Mode** | ✅ Completed | Use bot inline: `@botname twitter-url` |
 | 🌏 **i18n Support** | 💡 Considering | Multi-language interface (ES, FR, AR, etc.) |
 
 > 💡 Have a feature request? [Open an issue](https://github.com/Fl3xxRichie/tweet-video-downloader/issues)!
