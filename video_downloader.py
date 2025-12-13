@@ -3,6 +3,7 @@ import yt_dlp
 import time
 import asyncio
 import logging
+import shutil
 from typing import Dict, Optional, Callable
 from config import Config
 
@@ -13,6 +14,11 @@ class VideoDownloader:
         self.download_path = "downloads"
         if not os.path.exists(self.download_path):
             os.makedirs(self.download_path)
+
+        # Check if ffmpeg is available
+        self.ffmpeg_available = shutil.which('ffmpeg') is not None
+        if not self.ffmpeg_available:
+            logger.warning("ffmpeg not found! High quality downloads (1080p+) and format merging will be limited.")
 
     async def get_video_info(self, url: str) -> Optional[Dict]:
         """Get video information including size estimates"""
@@ -25,6 +31,12 @@ class VideoDownloader:
                     'no_warnings': True,
                     'skip_download': True,
                 }
+
+                # Handle YouTube specific requirements when ffmpeg is missing
+                # We need this in get_video_info too, otherwise extraction fails on some systems
+                if 'youtube.com' in url or 'youtu.be' in url:
+                     if not self.ffmpeg_available:
+                        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     return ydl.extract_info(url, download=False)
@@ -121,6 +133,12 @@ class VideoDownloader:
                     'postprocessors': [],
                 }
 
+                # Handle YouTube specific requirements when ffmpeg is missing
+                is_youtube = 'youtube.com' in url or 'youtu.be' in url
+                if is_youtube and not self.ffmpeg_available:
+                     # Use Android client to expose legacy formats (18, 22) that are direct downloads
+                    ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+
                 # Only set format if format_selector is not None (YouTube uses auto-select)
                 if format_selector:
                     ydl_opts['format'] = format_selector
@@ -203,6 +221,15 @@ class VideoDownloader:
         is_youtube = 'youtube.com' in url or 'youtu.be' in url
 
         if is_youtube:
+            # If ffmpeg is NOT available, we MUST fallback to single-file formats
+            if not self.ffmpeg_available:
+                # Prioritize format 22 (720p) and 18 (360p) which are often available as direct downloads on Android client
+                # Standard 'best' might pick a video-only stream
+                compat_formats = '22/18/best[ext=mp4]/best'
+                if quality == 'audio':
+                    return 'bestaudio/best'
+                return compat_formats
+
             # YouTube Shorts work best with no format specified - let yt-dlp auto-select
             # This avoids "format not available" errors
             # Return None to indicate no format should be specified
@@ -330,4 +357,3 @@ class VideoDownloader:
         except Exception as e:
             logger.error(f"Compression error: {e}")
             return {'success': False, 'error': str(e), 'file_path': file_path}
-
