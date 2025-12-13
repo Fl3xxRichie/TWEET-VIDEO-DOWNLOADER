@@ -10,10 +10,19 @@ from config import Config
 from pathlib import Path
 import threading
 from collections import defaultdict
+import secrets
+import string
 
 # ... (imports)
 
+logger = logging.getLogger(__name__)
+
+# Environment prefix to separate local and production data
+ENV = os.getenv('ENVIRONMENT', 'development')
+
 class RedisCache:
+    """Handles caching data in Redis."""
+    def __init__(self):
         self._redis_client = None
         self._connect_redis()
 
@@ -427,3 +436,38 @@ def format_timestamp(iso_timestamp: str) -> str:
     except Exception as e:
         logger.error(f"Error formatting timestamp: {e}")
         return "Unknown"
+
+class URLShortener:
+    """Handles URL shortening for deep linking"""
+    PREFIX = f"short:{ENV}:"
+
+    def __init__(self):
+        logger.info(f"URL Shortener initialized with prefix={self.PREFIX}")
+
+    def _get_key(self, code: str) -> str:
+        return f"{self.PREFIX}{code}"
+
+    def save_url(self, url: str) -> str:
+        """Save a URL and return a short code"""
+        alphabet = string.ascii_letters + string.digits
+
+        # Try to generate unique code
+        for _ in range(5):
+            code = ''.join(secrets.choice(alphabet) for _ in range(6))
+            key = self._get_key(code)
+            if not redis_cache.get(key):
+                redis_cache.set(key, url, ex=86400 * 7) # 7 days expiry
+                return code
+
+        # Fallback in unlikely case of collision
+        code = ''.join(secrets.choice(alphabet) for _ in range(8))
+        redis_cache.set(self._get_key(code), url, ex=86400 * 7)
+        return code
+
+    def get_url(self, code: str) -> Optional[str]:
+        """Get original URL from short code"""
+        return redis_cache.get(self._get_key(code))
+
+# Initialize URL shortener
+url_shortener = URLShortener()
+
