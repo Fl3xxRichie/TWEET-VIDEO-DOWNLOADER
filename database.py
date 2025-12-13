@@ -90,6 +90,41 @@ class UserStatsDB:
         """Generate Redis key for user stats"""
         return f"{self.STATS_KEY_PREFIX}{user_id}"
 
+    def get_total_users(self) -> int:
+        """Get total number of unique users"""
+        if not self._redis:
+            return len(self._memory_fallback)
+
+        try:
+            # Count keys matching pattern
+            pattern = f"{self.STATS_KEY_PREFIX}*"
+            keys = self._redis.keys(pattern)
+            return len(keys)
+        except Exception as e:
+            logger.error(f"Error getting total users: {e}")
+            return 0
+
+    def get_all_user_ids(self) -> list[int]:
+        """Get all user IDs"""
+        if not self._redis:
+            return list(self._memory_fallback.keys())
+
+        try:
+            pattern = f"{self.STATS_KEY_PREFIX}*"
+            keys = self._redis.keys(pattern)
+            # Extract IDs from keys (prefix:ID)
+            ids = []
+            for key in keys:
+                try:
+                    user_id = int(key.split(':')[-1])
+                    ids.append(user_id)
+                except ValueError:
+                    continue
+            return ids
+        except Exception as e:
+            logger.error(f"Error getting all user IDs: {e}")
+            return []
+
     def _get_user_stats_from_redis(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Load user stats from Redis"""
         if not self._redis:

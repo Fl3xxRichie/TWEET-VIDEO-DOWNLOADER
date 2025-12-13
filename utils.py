@@ -233,6 +233,10 @@ def parse_tweet_id(url: str) -> Optional[str]:
 
 def check_rate_limit(user_id: int) -> bool:
     """Check if user has exceeded rate limit using Redis or in-memory fallback"""
+    # Admin bypass
+    if Config.ADMIN_USER_ID and user_id == Config.ADMIN_USER_ID:
+        return True
+
     now = datetime.now()
     key = f"rate_limit:{ENV}:{user_id}"  # Environment-prefixed key
     user_data = redis_cache.get(key)
@@ -272,6 +276,14 @@ def check_rate_limit(user_id: int) -> bool:
 
 def get_rate_limit_status(user_id: int) -> dict:
     """Get current rate limit status for a user (without incrementing)"""
+    # Admin bypass
+    if Config.ADMIN_USER_ID and user_id == Config.ADMIN_USER_ID:
+        return {
+            'used': 0,
+            'limit': Config.RATE_LIMIT_PER_HOUR,
+            'remaining': 999999  # Effectively infinite
+        }
+
     now = datetime.now()
     key = f"rate_limit:{ENV}:{user_id}"
     user_data = redis_cache.get(key)

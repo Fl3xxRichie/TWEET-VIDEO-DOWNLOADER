@@ -27,7 +27,7 @@ class Config:
     ADMIN_USER_ID = os.getenv('ADMIN_USER_ID', None)
     if ADMIN_USER_ID:
         try:
-            ADMIN_USER_ID = int(ADMIN_USER_ID)
+            ADMIN_USER_ID = int(str(ADMIN_USER_ID).strip())
         except ValueError:
             logger.warning(f"Invalid ADMIN_USER_ID: {ADMIN_USER_ID}, admin features disabled")
             ADMIN_USER_ID = None

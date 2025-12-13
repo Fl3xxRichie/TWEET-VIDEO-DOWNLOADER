@@ -716,6 +716,109 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
         except:
             pass
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message to all bot users (Admin only)
+
+    Usage:
+    - Text only: /broadcast Your message here
+    - With image: Reply to an image with /broadcast Optional caption
+    """
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"Broadcast command from user {user_id}")
+
+        # Check if user is admin
+        if not Config.ADMIN_USER_ID or user_id != Config.ADMIN_USER_ID:
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+
+        # Check if this is a reply to a photo (image broadcast)
+        reply_message = update.message.reply_to_message
+        photo_file_id = None
+
+        if reply_message and reply_message.photo:
+            # Get the highest resolution photo
+            photo_file_id = reply_message.photo[-1].file_id
+
+        # Get message/caption to broadcast
+        broadcast_message = ' '.join(context.args) if context.args else None
+
+        # Validate input
+        if not photo_file_id and not broadcast_message:
+            await update.message.reply_text(
+                "📢 **Broadcast Usage**\n\n"
+                "**Text only:**\n"
+                "`/broadcast Your message here`\n\n"
+                "**With image:**\n"
+                "Reply to an image with `/broadcast` (optional caption)\n\n"
+                "**Examples:**\n"
+                "`/broadcast 🎉 New feature available!`\n"
+                "_Reply to photo_ + `/broadcast Check this out!`",
+                parse_mode='Markdown'
+            )
+            return
+
+        # Get all user IDs from database
+        all_user_ids = user_stats_db.get_all_user_ids()
+
+        if not all_user_ids:
+            await update.message.reply_text("❌ No users found in database.")
+            return
+
+        # Determine broadcast type
+        broadcast_type = "image" if photo_file_id else "text"
+
+        # Send progress message
+        progress_msg = await update.message.reply_text(
+            f"📢 Broadcasting {broadcast_type} to {len(all_user_ids)} users...\n"
+            f"This may take a moment."
+        )
+
+        success_count = 0
+        fail_count = 0
+
+        for uid in all_user_ids:
+            try:
+                if photo_file_id:
+                    # Send image with optional caption
+                    caption = f"📢 **Announcement**\n\n{broadcast_message}" if broadcast_message else "📢 **Announcement**"
+                    await context.bot.send_photo(
+                        chat_id=uid,
+                        photo=photo_file_id,
+                        caption=caption,
+                        parse_mode='Markdown'
+                    )
+                else:
+                    # Send text message
+                    await context.bot.send_message(
+                        chat_id=uid,
+                        text=f"📢 **Announcement**\n\n{broadcast_message}",
+                        parse_mode='Markdown'
+                    )
+                success_count += 1
+
+                # Small delay to avoid hitting rate limits
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                logger.warning(f"Failed to send broadcast to user {uid}: {e}")
+                fail_count += 1
+
+        # Update progress message with results
+        await progress_msg.edit_text(
+            f"📢 **Broadcast Complete**\n\n"
+            f"📝 Type: {broadcast_type.capitalize()}\n"
+            f"✅ Sent: {success_count}\n"
+            f"❌ Failed: {fail_count}\n"
+            f"📊 Total: {len(all_user_ids)} users"
+        )
+
+        logger.info(f"Broadcast ({broadcast_type}) completed: {success_count} sent, {fail_count} failed")
+
+    except Exception as e:
+        logger.error(f"Error in broadcast command: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error sending broadcast.")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     try:
@@ -922,6 +1025,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Format statistics message
         stats_text = "📊 **Your Download Statistics**\n\n"
+
+        # User ID and Admin Status (Debug Info)
+        is_admin = Config.ADMIN_USER_ID and user_id == int(Config.ADMIN_USER_ID)
+        admin_badge = "👑 **Admin Access: Active**\n" if is_admin else ""
+        stats_text += f"🆔 **User ID:** `{user_id}`\n{admin_badge}\n"
 
         # Total downloads
         stats_text += f"📥 **Total Downloads:** {stats['total_downloads']}\n"
