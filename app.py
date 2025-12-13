@@ -5,7 +5,7 @@ import asyncio
 import logging
 import logging.handlers
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, BotCommand
 from telegram.ext import ContextTypes
 from datetime import datetime
 from config import Config
@@ -41,6 +41,7 @@ except Exception as e:
 # Global application instance
 application = None
 cleanup_task = None
+MEDIA_FILE_ID_CACHE = {}
 
 async def safe_edit_message(message_or_query, text: str, reply_markup=None, parse_mode=None):
     """
@@ -300,6 +301,18 @@ async def lifespan(app: FastAPI):
                 )
                 logger.info(f"Webhook set to {Config.WEBHOOK_URL}")
 
+                # Set bot menu commands
+                commands = [
+                    BotCommand("start", "Start the bot"),
+                    BotCommand("help", "Get help and usage guide"),
+                    BotCommand("settings", "Change video quality settings"),
+                    BotCommand("stats", "View your download statistics"),
+                    BotCommand("history", "View your download history"),
+                    BotCommand("about", "About this bot")
+                ]
+                await application.bot.set_my_commands(commands)
+                logger.info("Bot commands menu set")
+
                 # Verify webhook was set
                 webhook_info = await application.bot.get_webhook_info()
                 logger.info(f"Webhook info: {webhook_info}")
@@ -311,6 +324,19 @@ async def lifespan(app: FastAPI):
             # No webhook - start polling in background alongside web server
             logger.info("No webhook URL configured, starting polling mode alongside web server")
             await application.bot.delete_webhook(drop_pending_updates=True)
+
+            # Set bot menu commands (polling mode)
+            commands = [
+                BotCommand("start", "Start the bot"),
+                BotCommand("help", "Get help and usage guide"),
+                BotCommand("settings", "Change video quality settings"),
+                BotCommand("stats", "View your download statistics"),
+                BotCommand("history", "View your download history"),
+                BotCommand("about", "About this bot")
+            ]
+            await application.bot.set_my_commands(commands)
+            logger.info("Bot commands menu set")
+
             await application.start()
             polling_task = asyncio.create_task(
                 application.updater.start_polling(
@@ -443,7 +469,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                     InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
                 ]
             ]
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "👋 Welcome to Twitter/X Video Downloader!\n\n"
                 "I can help you download videos from Twitter/X in various qualities.\n\n"
                 "Choose an option below to get started:",
@@ -452,7 +479,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             return
 
         elif data == 'menu_download':
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "📥 **How to Download Videos**\n\n"
                 "1. Copy a Twitter/X video URL\n"
                 "2. Send it to me\n"
@@ -506,7 +534,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 ]
             ]
 
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 settings_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
@@ -552,7 +581,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
 
             keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
 
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 stats_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
@@ -587,7 +617,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
 
             keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
 
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 help_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
@@ -615,7 +646,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
 
             keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
 
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 about_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
@@ -637,14 +669,14 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             # Set default quality preference
             quality = data.replace('quality_', '')
             user_prefs.set_preference(query.from_user.id, 'quality', quality)
-            await query.edit_message_text(f"✅ Default quality set to {quality.upper()}")
+            await safe_edit_message(query, f"✅ Default quality set to {quality.upper()}")
             logger.info(f"User {query.from_user.id} set default quality to {quality}")
 
         elif data.startswith('download_'):
             # Handle download with selected quality
             parts = data.split('_')
             if len(parts) < 3:
-                await query.edit_message_text("❌ Error: Invalid callback data format.")
+                await safe_edit_message(query, "❌ Error: Invalid callback data format.")
                 return
 
             quality = parts[1]
@@ -652,7 +684,7 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             url = redis_cache.get(url_id)
 
             if not url:
-                await query.edit_message_text("❌ Error: Original URL not found or expired. Please send the link again.")
+                await safe_edit_message(query, "❌ Error: Original URL not found or expired. Please send the link again.")
                 logger.warning(f"URL not found in cache for ID: {url_id}")
                 return
 
@@ -710,15 +742,122 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Twitter/X\n"
             "• Instagram Reels\n"
             "• TikTok\n"
-            "• YouTube Shorts\n\n"
+            "• YouTube\n\n"
             "Just send me a video URL to get started!"
         )
 
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        # Check for custom start media
+        if Config.START_MEDIA_URL:
+            try:
+                media_url = Config.START_MEDIA_URL
+                is_local_file = os.path.exists(media_url)
+
+                # Determine media type by extension
+                lower_url = media_url.lower()
+                is_video = any(lower_url.endswith(ext) for ext in ['.mp4', '.mov', '.avi'])
+                is_gif = lower_url.endswith('.gif')
+
+                if is_local_file:
+                    # Check cache first
+                    file_id = MEDIA_FILE_ID_CACHE.get(media_url)
+
+                    if file_id:
+                        # Send using cached file_id
+                        if is_video:
+                            await update.message.reply_video(
+                                video=file_id,
+                                caption=welcome_text,
+                                reply_markup=InlineKeyboardMarkup(keyboard),
+                                parse_mode='Markdown'
+                            )
+                        elif is_gif:
+                            await update.message.reply_animation(
+                                animation=file_id,
+                                caption=welcome_text,
+                                reply_markup=InlineKeyboardMarkup(keyboard),
+                                parse_mode='Markdown'
+                            )
+                        else:
+                            await update.message.reply_photo(
+                                photo=file_id,
+                                caption=welcome_text,
+                                reply_markup=InlineKeyboardMarkup(keyboard),
+                                parse_mode='Markdown'
+                            )
+                    else:
+                        # Handle local file upload and cache file_id
+                        sent_msg = None
+                        with open(media_url, 'rb') as f:
+                            if is_video:
+                                sent_msg = await update.message.reply_video(
+                                    video=f,
+                                    caption=welcome_text,
+                                    reply_markup=InlineKeyboardMarkup(keyboard),
+                                    parse_mode='Markdown'
+                                )
+                                # Cache video file_id
+                                if sent_msg.video:
+                                    MEDIA_FILE_ID_CACHE[media_url] = sent_msg.video.file_id
+                            elif is_gif:
+                                sent_msg = await update.message.reply_animation(
+                                    animation=f,
+                                    caption=welcome_text,
+                                    reply_markup=InlineKeyboardMarkup(keyboard),
+                                    parse_mode='Markdown'
+                                )
+                                # Cache animation file_id
+                                if sent_msg.animation:
+                                    MEDIA_FILE_ID_CACHE[media_url] = sent_msg.animation.file_id
+                            else:
+                                sent_msg = await update.message.reply_photo(
+                                    photo=f,
+                                    caption=welcome_text,
+                                    reply_markup=InlineKeyboardMarkup(keyboard),
+                                    parse_mode='Markdown'
+                                )
+                                # Cache photo file_id (largest size)
+                                if sent_msg.photo:
+                                    MEDIA_FILE_ID_CACHE[media_url] = sent_msg.photo[-1].file_id
+
+                        logger.info(f"Cached file_id for {media_url}")
+
+                else:
+                    # Handle URL (Telegram handles caching/downloading for URLs automatically mostly)
+                    if is_video:
+                        await update.message.reply_video(
+                            video=media_url,
+                            caption=welcome_text,
+                            reply_markup=InlineKeyboardMarkup(keyboard),
+                            parse_mode='Markdown'
+                        )
+                    elif is_gif:
+                        await update.message.reply_animation(
+                            animation=media_url,
+                            caption=welcome_text,
+                            reply_markup=InlineKeyboardMarkup(keyboard),
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await update.message.reply_photo(
+                            photo=media_url,
+                            caption=welcome_text,
+                            reply_markup=InlineKeyboardMarkup(keyboard),
+                            parse_mode='Markdown'
+                        )
+            except Exception as e:
+                logger.error(f"Failed to send start media: {e}")
+                # Fallback to text
+                await update.message.reply_text(
+                    welcome_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+        else:
+            await update.message.reply_text(
+                welcome_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
     except Exception as e:
         logger.error(f"Error in start command: {e}", exc_info=True)
 

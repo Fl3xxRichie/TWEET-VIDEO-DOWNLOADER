@@ -20,6 +20,9 @@ class Config:
     RATE_LIMIT_PER_HOUR = int(os.getenv('RATE_LIMIT_PER_HOUR', 5))
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
+    # Custom Start Screen Media
+    START_MEDIA_URL = os.getenv('START_MEDIA_URL', None)
+
     # Admin configuration (optional)
     ADMIN_USER_ID = os.getenv('ADMIN_USER_ID', None)
     if ADMIN_USER_ID:
