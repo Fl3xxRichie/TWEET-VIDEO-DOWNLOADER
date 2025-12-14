@@ -1739,6 +1739,7 @@ def setup_application() -> Application:
         bot_username = context.bot.username
 
         # Create result article
+        escaped_username = bot_username.replace('_', r'\_')
         results = [
             InlineQueryResultArticle(
                 id=short_code,
@@ -1746,7 +1747,7 @@ def setup_application() -> Application:
                 description="Click to download this video in the bot",
                 thumbnail_url="https://img.icons8.com/color/48/download--v1.png",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"{platform_emoji} *Downloading Video*\n\nI am downloading this video via @{bot_username.replace('_', r'\_')}!\n\n👇 Click below to get it too:",
+                    message_text=f"{platform_emoji} *Downloading Video*\n\nI am downloading this video via @{escaped_username}!\n\n👇 Click below to get it too:",
                     parse_mode='Markdown'
                 ),
                 reply_markup=InlineKeyboardMarkup([
