@@ -153,7 +153,7 @@ class UserStatsDB:
             self._memory_fallback[user_id] = stats
             return False
 
-    def _init_user(self, user_id: int, username: str = None) -> Dict[str, Any]:
+    def _init_user(self, user_id: int, username: str = None, first_name: str = None) -> Dict[str, Any]:
         """Initialize statistics for a new user or return existing"""
         stats = self._get_user_stats_from_redis(user_id)
         if stats is None:
@@ -177,13 +177,26 @@ class UserStatsDB:
                 'total_size_mb': 0.0,
                 'download_history': [],
                 'daily_stats': {},
-                'username': username
+                'username': username,
+                'first_name': first_name,
+                'referral_count': 0,
+                'referrals': [],
+                'referred_by': None
             }
             self._save_user_stats_to_redis(user_id, stats)
-        elif username and stats.get('username') != username:
-            # Update username if it changed
-            stats['username'] = username
-            self._save_user_stats_to_redis(user_id, stats)
+        else:
+            # Update info if changed
+            changed = False
+            if username and stats.get('username') != username:
+                stats['username'] = username
+                changed = True
+            if first_name and stats.get('first_name') != first_name:
+                stats['first_name'] = first_name
+                changed = True
+
+            if changed:
+                self._save_user_stats_to_redis(user_id, stats)
+
         return stats
 
     def _get_today_key(self) -> str:
@@ -198,10 +211,11 @@ class UserStatsDB:
         url: str = "",
         success: bool = True,
         username: str = None,
-        platform: str = None
+        platform: str = None,
+        first_name: str = None
     ) -> None:
         """Record a download event for a user"""
-        stats = self._init_user(user_id, username)
+        stats = self._init_user(user_id, username, first_name)
 
         if success:
             # Update counters
@@ -262,6 +276,80 @@ class UserStatsDB:
             logger.info(f"Recorded download for user {user_id}: {quality}, {size_mb:.2f}MB")
 
         self._save_user_stats_to_redis(user_id, stats)
+
+    def record_referral(self, referrer_id: int, new_user_id: int, new_user_first_name: str = None) -> bool:
+        """Record a referral event"""
+        # Don't allow self-referral
+        if referrer_id == new_user_id:
+            return False
+
+        # Init both users
+        referrer_stats = self._init_user(referrer_id)
+        new_user_stats = self._init_user(new_user_id, first_name=new_user_first_name)
+
+        # Check if new user was already referred
+        if new_user_stats.get('referred_by'):
+            return False
+
+        # Check if new user is actually new (no downloads yet)
+        # We might want to allow referrals for existing users who haven't been referred yet,
+        # but typically it's for new users. Let's allow it if they haven't been referred.
+
+        # Update new user stats
+        new_user_stats['referred_by'] = referrer_id
+        self._save_user_stats_to_redis(new_user_id, new_user_stats)
+
+        # Update referrer stats
+        if 'referral_count' not in referrer_stats:
+            referrer_stats['referral_count'] = 0
+
+        if 'referrals' not in referrer_stats:
+            referrer_stats['referrals'] = []
+
+        referrer_stats['referral_count'] += 1
+        referrer_stats['referrals'].append({
+            'user_id': new_user_id,
+            'timestamp': datetime.now().isoformat()
+        })
+
+        self._save_user_stats_to_redis(referrer_id, referrer_stats)
+        return True
+
+    def get_referral_stats(self, user_id: int) -> Dict[str, Any]:
+        """Get referral statistics for a user"""
+        stats = self._init_user(user_id)
+        return {
+            'referral_count': stats.get('referral_count', 0),
+            'referrals': stats.get('referrals', []),
+            'referred_by': stats.get('referred_by')
+        }
+
+    def get_top_referrers(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get top users by referral count"""
+        all_stats = self._get_all_stats()
+
+        # Filter for users with referrals
+        referrers = []
+        for user_id, stats in all_stats.items():
+            count = stats.get('referral_count', 0)
+            if count > 0:
+                referrers.append({
+                    'user_id': user_id,
+                    'username': stats.get('username'),
+                    'first_name': stats.get('first_name'),
+                    'referral_count': count
+                })
+
+        # Sort by count desc
+        sorted_referrers = sorted(
+            referrers,
+            key=lambda x: x['referral_count'],
+            reverse=True
+        )
+
+        return sorted_referrers[:limit]
+
+
 
     def get_user_stats(self, user_id: int) -> Dict[str, Any]:
         """Get statistics for a specific user"""

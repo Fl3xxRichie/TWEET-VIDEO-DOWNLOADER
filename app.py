@@ -122,7 +122,7 @@ async def cleanup_scheduler():
 # NOTE: Queue processor removed to reduce Redis API calls
 # Downloads now process directly in handle_quality_selection
 
-async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None, username: str = None, platform: str = None):
+async def process_download(user_id: int, chat_id: int, url: str, quality: str, message_id: int = None, username: str = None, platform: str = None, first_name: str = None):
     """Execute the actual download for a user request"""
 
     try:
@@ -239,7 +239,8 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
                         url=url,
                         success=True,
                         username=username,
-                        platform=platform
+                        platform=platform,
+                        first_name=first_name
                     )
                 except Exception as e:
                     logger.error(f"Stats error: {e}")
@@ -466,6 +467,7 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 ],
                 [
                     InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
+                    InlineKeyboardButton("👥 Invite Friends", callback_data="menu_invite"),
                 ]
             ]
             await safe_edit_message(
@@ -653,6 +655,48 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             )
             return
 
+        elif data == 'menu_invite':
+            user_id = query.from_user.id
+            bot_username = context.bot.username
+            referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+            ref_stats = user_stats_db.get_referral_stats(user_id)
+            count = ref_stats['referral_count']
+
+            invite_text = (
+                "👥 **Invite Friends & Earn Bragging Rights!**\n\n"
+                "Share your personal link to invite friends to the bot.\n\n"
+                f"🔗 **Your Referral Link:**\n`{referral_link}`\n\n"
+                f"📊 **Total Referrals:** {count}\n\n"
+            )
+
+            # Get leaderboard
+            top_referrers = user_stats_db.get_top_referrers(5)
+
+            if top_referrers:
+                invite_text += "🏆 **Top Referrers**\n"
+                for i, ref in enumerate(top_referrers, 1):
+                    name = ref.get('username')
+                    if name:
+                        name = f"@{name}"
+                    else:
+                        name = ref.get('first_name', f"User {ref['user_id']}")
+
+                    invite_text += f"{i}. {name} - {ref['referral_count']} invites\n"
+                invite_text += "\n"
+
+            invite_text += "Tap the link to copy it!"
+
+            keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
+
+            await safe_edit_message(
+                query,
+                invite_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+
         # Handle cancel download
         elif data == 'cancel_download':
             await query.message.delete()
@@ -701,7 +745,8 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 quality=quality,
                 message_id=query.message.message_id,
                 username=query.from_user.username,
-                platform=detect_platform(url)
+                platform=detect_platform(url),
+                first_name=query.from_user.first_name
             ))
 
             # Clean up URL from cache
@@ -823,18 +868,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         logger.info(f"Start command from user {update.effective_user.id}")
 
-        # Check for deep link arguments (short codes)
+        # Check for deep link arguments (short codes or referrals)
         if context.args and len(context.args) > 0:
-            short_code = context.args[0]
-            resolved_url = url_shortener.get_url(short_code)
+            arg = context.args[0]
 
-            if resolved_url:
-                logger.info(f"Resolved deep link: {short_code} -> {resolved_url}")
-                # Update message text to be the URL so handle_url processes it
-                update.message.text = resolved_url
-                # Delegate to handle_url
-                await handle_url(update, context)
-                return
+            # 1. Check for referrals
+            if arg.startswith('ref_'):
+                try:
+                    referrer_id = int(arg.replace('ref_', ''))
+                    current_user_id = update.effective_user.id
+
+                    if referrer_id != current_user_id:
+                        # Record referral
+                        success = user_stats_db.record_referral(
+                            referrer_id,
+                            current_user_id,
+                            new_user_first_name=update.effective_user.first_name
+                        )
+                        if success:
+                            logger.info(f"User {current_user_id} referred by {referrer_id}")
+                            # Optional: Notify referrer
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer_id,
+                                    text=f"🎉 **New Referral!**\n\nSomeone just joined using your link!",
+                                    parse_mode='Markdown'
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to notify referrer {referrer_id}: {e}")
+
+                except ValueError:
+                    logger.warning(f"Invalid referral arg: {arg}")
+
+            # 2. Check for short codes (priority over referral if both existed, but usually persistent)
+            # Actually, standard deep linking is one arg. So it's either ref or short code
+            elif not arg.startswith('ref_'):
+                short_code = arg
+                resolved_url = url_shortener.get_url(short_code)
+
+                if resolved_url:
+                    logger.info(f"Resolved deep link: {short_code} -> {resolved_url}")
+                    # Update message text to be the URL so handle_url processes it
+                    update.message.text = resolved_url
+                    # Delegate to handle_url
+                    await handle_url(update, context)
+                    return
 
 
         # Create main menu keyboard
@@ -849,6 +927,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [
                 InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
+                InlineKeyboardButton("👥 Invite Friends", callback_data="menu_invite"),
             ]
         ]
 
@@ -1880,11 +1959,15 @@ async def get_dashboard_stats():
         today_str = datetime.now().strftime('%Y-%m-%d')
         today_stats = daily_stats.get(today_str, {'downloads': 0, 'size_mb': 0})
 
+        # Get top referrers
+        top_referrers = user_stats_db.get_top_referrers(limit=10)
+
         return JSONResponse({
             'global': global_stats,
             'daily': daily_stats,
             'today': today_stats,
-            'top_users': top_users
+            'top_users': top_users,
+            'top_referrers': top_referrers
         })
     except Exception as e:
         logger.error(f"Error fetching dashboard stats: {e}")
