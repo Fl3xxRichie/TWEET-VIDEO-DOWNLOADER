@@ -235,11 +235,15 @@ def parse_tweet_id(url: str) -> Optional[str]:
     match = re.search(r'/status/(\d+)', url)
     return match.group(1) if match else None
 
-def check_rate_limit(user_id: int) -> bool:
+def check_rate_limit(user_id: int, limit: int = None) -> bool:
     """Check if user has exceeded rate limit using Redis or in-memory fallback"""
     # Admin bypass
     if Config.ADMIN_USER_ID and user_id == Config.ADMIN_USER_ID:
         return True
+
+    # Use default if not specified
+    if limit is None:
+        limit = Config.RATE_LIMIT_PER_HOUR
 
     now = datetime.now()
     key = f"rate_limit:{ENV}:{user_id}"  # Environment-prefixed key
@@ -263,8 +267,8 @@ def check_rate_limit(user_id: int) -> bool:
         count = 0
 
     # Check limit
-    if count >= Config.RATE_LIMIT_PER_HOUR:
-        logger.info(f"Rate limit exceeded for user {user_id}: {count}/{Config.RATE_LIMIT_PER_HOUR}")
+    if count >= limit:
+        logger.info(f"Rate limit exceeded for user {user_id}: {count}/{limit}")
         return False
 
     # Update count and save
@@ -274,17 +278,22 @@ def check_rate_limit(user_id: int) -> bool:
         'window_start': window_start.isoformat()
     }, ex=3600)  # Expire after 1 hour
 
-    logger.debug(f"Rate limit check for user {user_id}: {count}/{Config.RATE_LIMIT_PER_HOUR}")
+    logger.debug(f"Rate limit check for user {user_id}: {count}/{limit}")
     return True
 
 
-def get_rate_limit_status(user_id: int) -> dict:
+def get_rate_limit_status(user_id: int, limit: int = None) -> dict:
     """Get current rate limit status for a user (without incrementing)"""
+
+    # Use default if not specified
+    if limit is None:
+        limit = Config.RATE_LIMIT_PER_HOUR
+
     # Admin bypass
     if Config.ADMIN_USER_ID and user_id == Config.ADMIN_USER_ID:
         return {
             'used': 0,
-            'limit': Config.RATE_LIMIT_PER_HOUR,
+            'limit': limit,
             'remaining': 999999  # Effectively infinite
         }
 
@@ -307,10 +316,10 @@ def get_rate_limit_status(user_id: int) -> dict:
     if now - window_start > timedelta(hours=1):
         count = 0
 
-    remaining = max(0, Config.RATE_LIMIT_PER_HOUR - count)
+    remaining = max(0, limit - count)
     return {
         'used': count,
-        'limit': Config.RATE_LIMIT_PER_HOUR,
+        'limit': limit,
         'remaining': remaining
     }
 

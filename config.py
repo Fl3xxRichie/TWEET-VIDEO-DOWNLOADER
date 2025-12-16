@@ -18,6 +18,13 @@ class Config:
     PORT = int(os.getenv('PORT', 8000))
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', 50))
     RATE_LIMIT_PER_HOUR = int(os.getenv('RATE_LIMIT_PER_HOUR', 5))
+
+    # Referral Rewards Configuration
+    REFERRAL_THRESHOLD_TIER_1 = 3    # Users with 3+ referrals
+    REFERRAL_THRESHOLD_TIER_2 = 100  # Users with 100+ referrals
+    DAILY_LIMIT_TIER_1 = 10          # Tier 1 Limit (10/hr ~ 100/day)
+    DAILY_LIMIT_TIER_2 = 100         # Tier 2 Limit (100/hr ~ 1000/day)
+
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
     # Custom Start Screen Media

@@ -305,6 +305,7 @@ async def lifespan(app: FastAPI):
                 commands = [
                     BotCommand("start", "Start the bot"),
                     BotCommand("help", "Get help and usage guide"),
+                    BotCommand("invite", "Invite friends & earn rewards"),
                     BotCommand("settings", "Change video quality settings"),
                     BotCommand("stats", "View your download statistics"),
                     BotCommand("history", "View your download history"),
@@ -329,6 +330,7 @@ async def lifespan(app: FastAPI):
             commands = [
                 BotCommand("start", "Start the bot"),
                 BotCommand("help", "Get help and usage guide"),
+                BotCommand("invite", "Invite friends & earn rewards"),
                 BotCommand("settings", "Change video quality settings"),
                 BotCommand("stats", "View your download statistics"),
                 BotCommand("history", "View your download history"),
@@ -1043,18 +1045,90 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Failed to send start media: {e}")
                 # Fallback to text
                 await update.message.reply_text(
-                    welcome_text,
+                    welcome_text + "\n\n💡 **Tip:** Default limit is 5/hour. Use /invite to unlock up to 100/hour!",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
         else:
             await update.message.reply_text(
-                welcome_text,
+                welcome_text + "\n\n💡 **Tip:** Default limit is 5/hour. Use /invite to unlock up to 100/hour!",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
     except Exception as e:
         logger.error(f"Error in start command: {e}", exc_info=True)
+
+async def invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send referral info when the command /invite is issued."""
+    try:
+        user_id = update.effective_user.id
+        bot_username = context.bot.username
+        referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+        ref_stats = user_stats_db.get_referral_stats(user_id)
+        count = ref_stats['referral_count']
+
+        # Calculate tier info
+        current_limit = get_user_rate_limit(user_id)
+        if current_limit >= 999999:
+            limit_display = "Unlimited ♾️"
+            reward_text = "\n👑 **Admin Status!**\nYou have unlimited power!\n"
+        else:
+            limit_display = f"{current_limit}/hour"
+
+            next_tier = None
+            remaining_needed = 0
+
+            if count < Config.REFERRAL_THRESHOLD_TIER_1:
+                next_tier = Config.DAILY_LIMIT_TIER_1
+                remaining_needed = Config.REFERRAL_THRESHOLD_TIER_1 - count
+            elif count < Config.REFERRAL_THRESHOLD_TIER_2:
+                next_tier = Config.DAILY_LIMIT_TIER_2
+                remaining_needed = Config.REFERRAL_THRESHOLD_TIER_2 - count
+
+            reward_text = ""
+            if next_tier:
+                reward_text = f"\n🚀 **Bootstrap Your Limits!**\nRefer {remaining_needed} more friend{'s' if remaining_needed != 1 else ''} to unlock **{next_tier} downloads/hour**!\n"
+            elif count >= Config.REFERRAL_THRESHOLD_TIER_2:
+                reward_text = "\n👑 **Legendary Status!**\nYou have unlocked the highest rate limit!\n"
+
+        invite_text = (
+            "👥 **Invite Friends & Earn Bragging Rights!**\n\n"
+            "Share your personal link to invite friends to the bot.\n\n"
+            f"🔗 **Your Referral Link:**\n`{referral_link}`\n\n"
+            f"📊 **Total Referrals:** {count}\n"
+            f"⚡ **Current Limit:** {limit_display}\n"
+            f"{reward_text}\n"
+        )
+
+        # Get leaderboard
+        top_referrers = user_stats_db.get_top_referrers(5)
+
+        if top_referrers:
+            invite_text += "🏆 **Top Referrers**\n"
+            for i, ref in enumerate(top_referrers, 1):
+                name = ref.get('username')
+                if name:
+                    name = f"@{name}"
+                else:
+                    name = ref.get('first_name', f"User {ref['user_id']}")
+
+                invite_text += f"{i}. {name} - {ref['referral_count']} invites\n"
+            invite_text += "\n"
+
+        invite_text += "Tap the link to copy it!"
+
+        keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="menu_main")]]
+
+        await update.message.reply_text(
+            invite_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logger.error(f"Error in invite command: {e}")
+        await update.message.reply_text("❌ Error loading invite info.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send help message with usage instructions"""
@@ -1068,6 +1142,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "**📦 Batch Download:**\n"
             "Send multiple URLs in one message!\n"
             "Videos download in your default quality.\n\n"
+            "**⚡ Limits & Rewards:**\n"
+            "• Default: 5 videos/hour\n"
+            "• Refer 3 friends: 10 videos/hour\n"
+            "• Refer 100 friends: 100 videos/hour\n"
+            "Use /invite to unlock higher limits!\n\n"
             "**Supported platforms:**\n"
             "Twitter/X • Instagram • TikTok • YouTube Shorts\n\n"
             "**Qualities:** HD • 720p • 480p • 360p • Audio\n\n"
@@ -1115,6 +1194,15 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Get user statistics
         stats = user_stats_db.get_user_stats(user_id)
 
+        # Get current limit
+        current_limit = get_user_rate_limit(user_id)
+        if current_limit >= 999999:
+            limit_text = "Unlimited ♾️"
+        else:
+            limit_text = f"{current_limit}/hour"
+            if current_limit < Config.DAILY_LIMIT_TIER_2:
+                limit_text += " (Increase via /invite)"
+
         # Format statistics message
         stats_text = "📊 **Your Download Statistics**\n\n"
 
@@ -1125,6 +1213,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Total downloads
         stats_text += f"📥 **Total Downloads:** {stats['total_downloads']}\n"
+        stats_text += f"⚡ **Current Limit:** {limit_text}\n"
 
         # Downloads by quality
         if stats['total_downloads'] > 0:
@@ -1265,8 +1354,14 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         logger.info(f"History command from user {user_id}")
 
-        # Get user statistics which includes download history
+        # Get user statistics
         stats = user_stats_db.get_user_stats(user_id)
+
+        # Get current limit
+        current_limit = get_user_rate_limit(user_id)
+        limit_text = f"{current_limit}/hour"
+        if current_limit < Config.DAILY_LIMIT_TIER_2:
+            limit_text += " (Increase via /invite)"
         history = stats.get('download_history', [])
 
         if not history:
@@ -1476,6 +1571,29 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error sending broadcast.")
 
 
+def get_user_rate_limit(user_id: int) -> int:
+    """Calculate rate limit based on referral count"""
+    try:
+        # Admin bypass
+        if Config.ADMIN_USER_ID and user_id == int(Config.ADMIN_USER_ID):
+            return 999999
+
+        # Get referral stats (lightweight check)
+        # Note: Ideally we'd cache this or store tier in redis to avoid DB hit every time
+        # For now, we'll fetch from stats DB which is Redis-backed
+        stats = user_stats_db.get_referral_stats(user_id)
+        referral_count = stats.get('referral_count', 0)
+
+        if referral_count >= Config.REFERRAL_THRESHOLD_TIER_2:
+            return Config.DAILY_LIMIT_TIER_2
+        elif referral_count >= Config.REFERRAL_THRESHOLD_TIER_1:
+            return Config.DAILY_LIMIT_TIER_1
+
+        return Config.RATE_LIMIT_PER_HOUR
+    except Exception as e:
+        logger.error(f"Error calculating rate limit: {e}")
+        return Config.RATE_LIMIT_PER_HOUR
+
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming video URLs (supports batch - multiple URLs, multiple platforms)"""
     import re
@@ -1508,13 +1626,17 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Determine user's rate limit
+        user_limit = get_user_rate_limit(user_id)
+
         # Check rate limit status
-        rate_status = get_rate_limit_status(user_id)
+        rate_status = get_rate_limit_status(user_id, limit=user_limit)
 
         if rate_status['remaining'] <= 0:
             await update.message.reply_text(
                 f"⚠️ Rate limit exceeded. Please try again in an hour.\n"
-                f"(Limit: {Config.RATE_LIMIT_PER_HOUR} downloads per hour)"
+                f"(Limit: {user_limit} downloads per hour)\n\n"
+                f"💡 **Tip:** Invite friends via /invite to increase your limit!"
             )
             return
 
@@ -1535,10 +1657,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Single URL processing
         url = urls[0]
 
-        if not check_rate_limit(user_id):
+        if not check_rate_limit(user_id, limit=user_limit):
             await update.message.reply_text(
                 f"⚠️ Rate limit exceeded. Please try again in an hour.\n"
-                f"(Limit: {Config.RATE_LIMIT_PER_HOUR} downloads per hour)"
+                f"(Limit: {user_limit} downloads per hour)"
             )
             return
 
@@ -1783,6 +1905,7 @@ def setup_application() -> Application:
     # Command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("invite", invite_command))
     application.add_handler(CommandHandler("quality", quality_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("settings", settings_command))
