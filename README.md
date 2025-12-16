@@ -467,6 +467,7 @@ Once the secret is added, the workflow will start running on its schedule, keepi
 | `/stats` | View your download statistics | `/stats` |
 | `/history` | View your last 10 downloads | `/history` |
 | `/settings` | Configure personal bot settings | `/settings` |
+| `/donate` | Support the bot with donations | `/donate` |
 | `/about` | Information about the bot and developer | `/about` |
 | `/adminstats` | Admin dashboard (admin only) | `/adminstats` |
 | `/broadcast` | Send message to all users (admin only) | `/broadcast <msg>` |

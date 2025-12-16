@@ -30,6 +30,15 @@ class Config:
     # Custom Start Screen Media
     START_MEDIA_URL = os.getenv('START_MEDIA_URL', None)
 
+    # Donation Configuration (Optional - set your own addresses)
+    DONATE_BTC = os.getenv('DONATE_BTC', None)
+    DONATE_ETH = os.getenv('DONATE_ETH', None)
+    DONATE_SOL = os.getenv('DONATE_SOL', None)
+    DONATE_TRX = os.getenv('DONATE_TRX', None)
+    DONATE_LTC = os.getenv('DONATE_LTC', None)
+    DONATE_COFFEE_URL = os.getenv('DONATE_COFFEE_URL', None)
+    DONATE_GITHUB_URL = os.getenv('DONATE_GITHUB_URL', None)
+
     # Admin configuration (optional)
     ADMIN_USER_ID = os.getenv('ADMIN_USER_ID', None)
     if ADMIN_USER_ID:

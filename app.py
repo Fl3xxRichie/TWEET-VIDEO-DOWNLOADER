@@ -470,6 +470,9 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
                 [
                     InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
                     InlineKeyboardButton("👥 Invite Friends", callback_data="menu_invite"),
+                ],
+                [
+                    InlineKeyboardButton("💝 Support / Donate", callback_data="menu_donate"),
                 ]
             ]
             await safe_edit_message(
@@ -694,6 +697,56 @@ async def handle_quality_selection(update: Update, context: ContextTypes.DEFAULT
             await safe_edit_message(
                 query,
                 invite_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+
+        elif data == 'menu_donate':
+            # Build donation text dynamically from environment variables
+            donate_text = "💝 **Support This Bot**\n\n"
+            donate_text += "If you find this bot useful, consider supporting its development!\n\n"
+
+            # Add coffee link if configured
+            if Config.DONATE_COFFEE_URL:
+                donate_text += f"**☕ Buy Me a Coffee:**\n{Config.DONATE_COFFEE_URL}\n\n"
+
+            # Build crypto section dynamically
+            crypto_wallets = []
+            if Config.DONATE_BTC:
+                crypto_wallets.append(f"• **BTC:** `{Config.DONATE_BTC}`")
+            if Config.DONATE_ETH:
+                crypto_wallets.append(f"• **ETH/USDT (ERC20):** `{Config.DONATE_ETH}`")
+            if Config.DONATE_SOL:
+                crypto_wallets.append(f"• **SOL:** `{Config.DONATE_SOL}`")
+            if Config.DONATE_TRX:
+                crypto_wallets.append(f"• **TRX/USDT (TRC20):** `{Config.DONATE_TRX}`")
+            if Config.DONATE_LTC:
+                crypto_wallets.append(f"• **LTC:** `{Config.DONATE_LTC}`")
+
+            if crypto_wallets:
+                donate_text += "**💳 Crypto Donations:**\n"
+                donate_text += "\n".join(crypto_wallets) + "\n\n"
+
+            donate_text += (
+                "**⭐ Other Ways to Support:**\n"
+                "• Star the repo on GitHub\n"
+                "• Invite friends via /invite\n"
+                "• Share the bot with others!\n\n"
+                "Thank you for your support! 🙏"
+            )
+
+            # Build keyboard dynamically
+            keyboard = []
+            if Config.DONATE_COFFEE_URL:
+                keyboard.append([InlineKeyboardButton("☕ Buy Me a Coffee", url=Config.DONATE_COFFEE_URL)])
+            if Config.DONATE_GITHUB_URL:
+                keyboard.append([InlineKeyboardButton("⭐ Star on GitHub", url=Config.DONATE_GITHUB_URL)])
+            keyboard.append([InlineKeyboardButton("« Back to Menu", callback_data="menu_main")])
+
+            await safe_edit_message(
+                query,
+                donate_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
@@ -930,6 +983,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
                 InlineKeyboardButton("👥 Invite Friends", callback_data="menu_invite"),
+            ],
+            [
+                InlineKeyboardButton("💝 Support / Donate", callback_data="menu_donate"),
             ]
         ]
 
@@ -1346,6 +1402,61 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Error in about command: {e}", exc_info=True)
+
+
+async def donate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display donation options to support the bot"""
+    try:
+        logger.info(f"Donate command from user {update.effective_user.id}")
+
+        # Build donation text dynamically from environment variables
+        donate_text = "💝 **Support This Bot**\n\n"
+        donate_text += "If you find this bot useful, consider supporting its development!\n\n"
+
+        # Add coffee link if configured
+        if Config.DONATE_COFFEE_URL:
+            donate_text += f"**☕ Buy Me a Coffee:**\n{Config.DONATE_COFFEE_URL}\n\n"
+
+        # Build crypto section dynamically
+        crypto_wallets = []
+        if Config.DONATE_BTC:
+            crypto_wallets.append(f"• **BTC:** `{Config.DONATE_BTC}`")
+        if Config.DONATE_ETH:
+            crypto_wallets.append(f"• **ETH/USDT (ERC20):** `{Config.DONATE_ETH}`")
+        if Config.DONATE_SOL:
+            crypto_wallets.append(f"• **SOL:** `{Config.DONATE_SOL}`")
+        if Config.DONATE_TRX:
+            crypto_wallets.append(f"• **TRX/USDT (TRC20):** `{Config.DONATE_TRX}`")
+        if Config.DONATE_LTC:
+            crypto_wallets.append(f"• **LTC:** `{Config.DONATE_LTC}`")
+
+        if crypto_wallets:
+            donate_text += "**💳 Crypto Donations:**\n"
+            donate_text += "\n".join(crypto_wallets) + "\n\n"
+
+        donate_text += (
+            "**⭐ Other Ways to Support:**\n"
+            "• Star the repo on GitHub\n"
+            "• Invite friends via /invite\n"
+            "• Share the bot with others!\n\n"
+            "Thank you for your support! 🙏"
+        )
+
+        # Build keyboard dynamically
+        keyboard = []
+        if Config.DONATE_COFFEE_URL:
+            keyboard.append([InlineKeyboardButton("☕ Buy Me a Coffee", url=Config.DONATE_COFFEE_URL)])
+        if Config.DONATE_GITHUB_URL:
+            keyboard.append([InlineKeyboardButton("⭐ Star on GitHub", url=Config.DONATE_GITHUB_URL)])
+        keyboard.append([InlineKeyboardButton("« Back to Menu", callback_data="menu_main")])
+
+        await update.message.reply_text(
+            donate_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error in donate command: {e}", exc_info=True)
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1910,6 +2021,7 @@ def setup_application() -> Application:
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("settings", settings_command))
     application.add_handler(CommandHandler("about", about_command))
+    application.add_handler(CommandHandler("donate", donate_command))
     application.add_handler(CommandHandler("adminstats", admin_stats_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("history", history_command))
