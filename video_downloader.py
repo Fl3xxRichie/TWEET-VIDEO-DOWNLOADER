@@ -20,8 +20,13 @@ class VideoDownloader:
         if not self.ffmpeg_available:
             logger.warning("ffmpeg not found! High quality downloads (1080p+) and format merging will be limited.")
 
-    async def get_video_info(self, url: str) -> Optional[Dict]:
-        """Get video information including size estimates"""
+    async def get_video_info(self, url: str, timeout: float = 30.0) -> Optional[Dict]:
+        """Get video information including size estimates.
+
+        Args:
+            url: The video URL to get info for
+            timeout: Maximum seconds to wait for info extraction (default: 30s)
+        """
         try:
             loop = asyncio.get_event_loop()
 
@@ -30,6 +35,11 @@ class VideoDownloader:
                     'quiet': True,
                     'no_warnings': True,
                     'skip_download': True,
+                    # Performance optimizations
+                    'socket_timeout': 10,       # 10 second socket timeout
+                    'retries': 2,               # Reduce from default 10 retries
+                    'fragment_retries': 2,      # Reduce fragment retries
+                    'extractor_retries': 2,     # Reduce extractor retries
                 }
 
                 # Handle YouTube specific requirements when ffmpeg is missing
@@ -41,7 +51,15 @@ class VideoDownloader:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     return ydl.extract_info(url, download=False)
 
-            info = await loop.run_in_executor(None, extract_info)
+            # Wrap with timeout to prevent hanging on slow platforms
+            try:
+                info = await asyncio.wait_for(
+                    loop.run_in_executor(None, extract_info),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Video info extraction timed out after {timeout}s for: {url}")
+                return None
 
             if not info:
                 return None
@@ -89,6 +107,9 @@ class VideoDownloader:
                 'size_estimates': size_estimates
             }
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Video info extraction timed out for: {url}")
+            return None
         except Exception as e:
             logger.error(f"Error getting video info: {e}")
             return None
@@ -131,6 +152,10 @@ class VideoDownloader:
                     'audioformat': 'mp3' if quality == 'audio' else None,
                     # Skip post-processing that requires ffmpeg
                     'postprocessors': [],
+                    # Performance optimizations
+                    'socket_timeout': 15,       # 15 second socket timeout for downloads
+                    'retries': 3,               # Keep reasonable retries for downloads
+                    'fragment_retries': 3,
                 }
 
                 # Handle YouTube specific requirements when ffmpeg is missing
