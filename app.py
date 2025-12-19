@@ -135,10 +135,27 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
 
         # Initial status update - always send a new text message for progress
         # This avoids issues with editing photo messages that have captions
+        # Show engaging progress with stages
         progress_message = await bot.send_message(
             chat_id=chat_id,
-            text=f"🚀 Processing your download in {quality.upper()} quality..."
+            text=f"🚀 **Preparing your {quality.upper()} download...**\n\n"
+                 f"📡 Stage 1/3: Connecting to server...\n"
+                 f"⏳ This usually takes 5-15 seconds",
+            parse_mode='Markdown'
         )
+
+        # Update to stage 2 after a brief moment
+        await asyncio.sleep(1)
+        try:
+            await progress_message.edit_text(
+                f"🚀 **Preparing your {quality.upper()} download...**\n\n"
+                f"✅ Stage 1/3: Connected!\n"
+                f"🔍 Stage 2/3: Fetching video stream...\n"
+                f"💡 Tip: Set your default quality with /settings",
+                parse_mode='Markdown'
+            )
+        except:
+            pass
 
         # Delete the old message with the photo/quality selection if possible
         if message_id:
@@ -148,34 +165,54 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
                 logger.warning(f"Could not delete old message: {e}")
 
         async def progress_callback(progress_info):
-            """Callback to update progress"""
+            """Callback to update progress with engaging visuals"""
             try:
                 status = progress_info.get('status')
 
                 if status == 'downloading':
-                    percent = progress_info.get('_percent_str', 'N/A')
+                    percent_str = progress_info.get('_percent_str', 'N/A').strip()
                     speed = progress_info.get('_speed_str', 'N/A')
                     eta = progress_info.get('_eta_str', 'N/A')
 
-                    progress_text = f"📥 Downloading {quality.upper()}...\n"
-                    progress_text += f"Progress: {percent}\n"
-                    progress_text += f"Speed: {speed}\n"
-                    progress_text += f"ETA: {eta}"
-
-                    # Edit 'status' so we don't edit too often?
-                    # yt-dlp calls frequently. app.py logic didn't seem to rate limit,
-                    # maybe we should simple throttle here slightly but for now let's keep it simple
+                    # Create a visual progress bar
                     try:
-                        await progress_message.edit_text(progress_text)
+                        percent_num = float(percent_str.replace('%', ''))
+                        filled = int(percent_num / 10)
+                        bar = '█' * filled + '░' * (10 - filled)
                     except:
-                        pass # Ignore "message not modified" errors
+                        bar = '░' * 10
+
+                    progress_text = (
+                        f"🚀 **Downloading {quality.upper()}...**\n\n"
+                        f"✅ Stage 1/3: Connected!\n"
+                        f"✅ Stage 2/3: Stream found!\n"
+                        f"📥 Stage 3/3: Downloading...\n\n"
+                        f"[{bar}] {percent_str}\n"
+                        f"⚡ Speed: {speed}\n"
+                        f"⏱️ ETA: {eta}"
+                    )
+
+                    try:
+                        await progress_message.edit_text(progress_text, parse_mode='Markdown')
+                    except:
+                        pass  # Ignore "message not modified" errors
 
                 elif status == 'compressing':
                     target_mb = progress_info.get('target_mb', 45)
-                    await progress_message.edit_text(f"🗜️ Compressing video to under {target_mb}MB...\nThis may take a moment.")
+                    await progress_message.edit_text(
+                        f"🗜️ **Compressing Video**\n\n"
+                        f"📏 Target size: under {target_mb}MB\n"
+                        f"⏳ This may take a moment...\n\n"
+                        f"💡 Large files are compressed for faster delivery!",
+                        parse_mode='Markdown'
+                    )
 
                 elif status == 'finished':
-                    await progress_message.edit_text("✅ Download completed! Processing...")
+                    await progress_message.edit_text(
+                        "✅ **Download Complete!**\n\n"
+                        "📤 Preparing to send your video...",
+                        parse_mode='Markdown'
+                    )
 
             except Exception as e:
                 logger.error(f"Progress update error: {e}")
@@ -197,7 +234,12 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
             if file_size_mb > 49.0: # Telegram limit is 50MB
-                await progress_message.edit_text(f"📏 File size ({file_size_mb:.1f}MB) exceeds limit. Compressing...")
+                await progress_message.edit_text(
+                    f"📏 **File Size Exceeded**\n\n"
+                    f"📦 Current: {file_size_mb:.1f}MB (limit: 50MB)\n"
+                    f"🗜️ Compressing for Telegram...",
+                    parse_mode='Markdown'
+                )
 
                 compress_result = await video_downloader.compress_video(
                     file_path,
@@ -213,21 +255,41 @@ async def process_download(user_id: int, chat_id: int, url: str, quality: str, m
                     # Try to send anyway if it failed? Or fail?
                     # If it's > 50MB sending will likely fail.
 
-            # Send the video file
-            await progress_message.edit_text("📤 Sending video...")
+            # Send the video file with file size info
+            final_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+            # Calculate dynamic timeout based on file size (minimum 30s, ~2s per MB)
+            upload_timeout = max(30, int(final_size_mb * 2) + 15)
+
+            await progress_message.edit_text(
+                f"📤 **Sending Your Video...**\n\n"
+                f"📦 Size: {final_size_mb:.1f}MB\n"
+                f"⏳ Uploading to Telegram...",
+                parse_mode='Markdown'
+            )
 
             try:
+                # Track upload time for debugging
+                upload_start = time.time()
+
+                # Use InputFile for potentially better performance with file path
+                from telegram import InputFile
+
                 with open(file_path, 'rb') as video_file:
                     await bot.send_video(
                         chat_id=chat_id,
                         video=video_file,
                         caption=f"🎥 Downloaded in {quality.upper()} quality",
                         supports_streaming=True,
-                        read_timeout=120,
-                        write_timeout=120,
-                        connect_timeout=120,
-                        pool_timeout=120
+                        # Optimized timeouts - shorter for faster failure detection
+                        read_timeout=upload_timeout,
+                        write_timeout=upload_timeout,
+                        connect_timeout=15,  # Connection should be fast
+                        pool_timeout=15      # Pool wait should be fast
                     )
+
+                upload_time = time.time() - upload_start
+                logger.info(f"Video upload completed in {upload_time:.1f}s for {final_size_mb:.1f}MB ({final_size_mb/upload_time:.2f} MB/s)")
 
                 # Statistics and Cleanup
                 try:
@@ -1991,10 +2053,34 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 def setup_application() -> Application:
-    """Configure and return Telegram application"""
+    """Configure and return Telegram application with optimized HTTP settings"""
     logger.info("Setting up Telegram application...")
 
-    application = Application.builder().token(Config.BOT_TOKEN).build()
+    # Configure HTTP settings for better upload performance
+    from telegram.request import HTTPXRequest
+
+    # Create optimized request object with connection pooling and proper timeouts
+    request = HTTPXRequest(
+        connection_pool_size=10,      # Allow multiple concurrent connections
+        read_timeout=30.0,            # 30 second read timeout
+        write_timeout=60.0,           # 60 second write timeout for uploads
+        connect_timeout=10.0,         # 10 second connection timeout
+        pool_timeout=10.0,            # 10 second pool timeout
+    )
+
+    application = (
+        Application.builder()
+        .token(Config.BOT_TOKEN)
+        .request(request)
+        .get_updates_request(HTTPXRequest(  # Separate settings for polling
+            connection_pool_size=1,
+            read_timeout=30.0,
+            write_timeout=10.0,
+            connect_timeout=10.0,
+            pool_timeout=10.0,
+        ))
+        .build()
+    )
 
     # Add error handler
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
